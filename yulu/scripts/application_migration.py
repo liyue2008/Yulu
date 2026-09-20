@@ -1827,11 +1827,19 @@ def run_migration_step(
         else nullcontext(authority)
     )
     with authority_scope as authority:
-        retained_retry_transaction = (
-            _retained_runtime_retry_transaction(paths, authority._journal)
-            if request_retry and isinstance(authority._journal, dict)
-            else None
-        )
+        retained_retry_transaction = None
+        retry_preflight_complete = False
+        if request_retry and isinstance(authority._journal, dict):
+            try:
+                preflight_standard_outputs(legacy_root, paths.durable_root)
+                retry_preflight_complete = True
+            except MigrationBlocked:
+                retained_retry_transaction = _retained_runtime_retry_transaction(
+                    paths,
+                    authority._journal,
+                )
+                if retained_retry_transaction is None:
+                    raise
         starting_transaction = authority._journal is None or request_retry
         if starting_transaction:
             if request_retry:
@@ -1843,7 +1851,10 @@ def run_migration_step(
                     raise MigrationBlocked(
                         "retry preflight cannot find the legacy install"
                     )
-                if retained_retry_transaction is None:
+                if (
+                    retained_retry_transaction is None
+                    and not retry_preflight_complete
+                ):
                     preflight_standard_outputs(legacy_root, paths.durable_root)
                 launch_agents_fd = authority.launch_agents_fd(launch_agents_dir)
                 try:
@@ -1858,11 +1869,10 @@ def run_migration_step(
                     _capture_snapshot_from_jobs(retry_snapshot, home_dir),
                     legacy_capture_socket,
                 )
-                authority.begin_retry(archive_dir=archive_dir)
-                if retained_retry_transaction is not None:
-                    authority.mark_retained_runtime_retry(
-                        retained_retry_transaction
-                    )
+                authority.begin_retry(
+                    archive_dir=archive_dir,
+                    retained_runtime_transaction=retained_retry_transaction,
+                )
             else:
                 authority.begin()
             if app_bundle is not None:
@@ -3422,7 +3432,12 @@ class ApplicationMigration:
         self._write_journal()
         return dict(self._journal)
 
-    def begin_retry(self, *, archive_dir: Path) -> dict[str, object]:
+    def begin_retry(
+        self,
+        *,
+        archive_dir: Path,
+        retained_runtime_transaction: str | None = None,
+    ) -> dict[str, object]:
         if self._attempt_fd < 0:
             raise RuntimeError("migration authority must hold its lock")
         previous = self._journal
@@ -3435,6 +3450,15 @@ class ApplicationMigration:
             or re.fullmatch(r"[0-9a-f]{32}", previous_transaction) is None
         ):
             raise MigrationBlocked("retry preflight journal metadata is invalid")
+        retained_runtime_retry = retained_runtime_transaction is not None
+        runtime_initialized = previous.get("runtimeInitializationStarted")
+        if retained_runtime_retry and (
+            retained_runtime_transaction != previous_transaction
+            or type(runtime_initialized) is not bool
+            or not runtime_initialized
+            or not isinstance(previous.get("retainedRuntimeOutputs"), dict)
+        ):
+            raise MigrationBlocked("retained runtime retry binding is invalid")
         previous_attempt = previous.get("attemptNumber", 1)
         if type(previous_attempt) is not int or previous_attempt < 1:
             raise MigrationBlocked("retry preflight attempt metadata is invalid")
@@ -3455,6 +3479,11 @@ class ApplicationMigration:
             "attemptNumber": previous_attempt + 1,
             "retryPreflightOnly": True,
             "transactionOutputIdentities": {},
+            **(
+                {"retainedRuntimeRetryOf": previous_transaction}
+                if retained_runtime_retry
+                else {}
+            ),
         }
         preflight_only = previous.get("retryPreflightOnly")
         preflight_only_is_true = type(preflight_only) is bool and preflight_only
@@ -3550,33 +3579,21 @@ class ApplicationMigration:
             for identity in transaction_outputs.values()
         ):
             raise MigrationBlocked("retry preflight output identities are invalid")
-        for name in transaction_outputs:
-            current = (
-                _directory_identity_at(self._durable_root_fd, name)
-                if name in directory_names
-                else _regular_file_identity_at(self._durable_root_fd, name)
-            )
-            if current is not None:
-                raise MigrationBlocked(
-                    "retry preflight found a previous transaction output"
+        if not retained_runtime_retry:
+            for name in transaction_outputs:
+                current = (
+                    _directory_identity_at(self._durable_root_fd, name)
+                    if name in directory_names
+                    else _regular_file_identity_at(self._durable_root_fd, name)
                 )
+                if current is not None:
+                    raise MigrationBlocked(
+                        "retry preflight found a previous transaction output"
+                    )
 
         self._journal = {**retry_journal, "archiveDirectory": retry_archive_identity}
         self._write_journal()
         return dict(self._journal)
-
-    def mark_retained_runtime_retry(self, transaction_id: str) -> None:
-        if (
-            self._journal is None
-            or self._journal.get("phase") != "preflight"
-            or re.fullmatch(r"[0-9a-f]{32}", transaction_id) is None
-        ):
-            raise MigrationBlocked("retained runtime retry marker is invalid")
-        self._journal = {
-            **self._journal,
-            "retainedRuntimeRetryOf": transaction_id,
-        }
-        self._write_journal()
 
     def record_bundle_manifest(self, manifest: dict[str, str]) -> None:
         if self._journal is None or self._journal.get("phase") != "preflight":
