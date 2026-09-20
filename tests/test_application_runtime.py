@@ -1,3 +1,5 @@
+# pyright: reportMissingImports=false
+
 import hashlib
 import io
 import json
@@ -10,7 +12,6 @@ import tarfile
 from pathlib import Path
 
 import pytest
-
 
 ROOT = Path(__file__).resolve().parents[1]
 PREPARE = ROOT / "packaging" / "scripts" / "prepare_application_runtime.sh"
@@ -780,7 +781,7 @@ def test_application_runtime_inventory_seals_bundle_relative_smappservice_agents
 
     host_plist = app / "Contents/Library/LaunchAgents/com.yulu.ui.plist"
     unsafe = plistlib.loads(host_plist.read_bytes())
-    unsafe["Program"] = "/tmp/unbundled-host"
+    unsafe["Program"] = str(tmp_path / "unbundled-host")
     host_plist.write_bytes(plistlib.dumps(unsafe))
     rejected = subprocess.run(
         ["bash", str(VERIFY), "--write-inventory", str(app)],
@@ -1147,6 +1148,65 @@ def test_application_runtime_verifier_rejects_library_validation_bypass_for_team
 
     assert result.returncode != 0
     assert "team-signed Node must enforce library validation" in result.stderr
+
+
+def test_adhoc_python_runtime_uses_library_validation_exception_only_for_local_builds():
+    build = (ROOT / "yulu/scripts/build_audio_daemon.sh").read_text(encoding="utf-8")
+    verifier = VERIFY.read_text(encoding="utf-8")
+    entitlements = plistlib.loads(
+        (ROOT / "yulu/scripts/PythonRuntimeAdHoc.entitlements").read_bytes()
+    )
+
+    assert entitlements == {"com.apple.security.cs.disable-library-validation": True}
+    assert 'PYTHON_ENTITLEMENTS="$SCRIPT_DIR/PythonRuntimeAdHoc.entitlements"' in build
+    assert 'runtime_code" == "$PYTHON_RUNTIME_EXECUTABLE"' in build
+    assert "bundled Python cannot load signed Runtime Packs" in verifier
+    assert "team-signed Python must enforce library validation" in verifier
+
+
+def test_application_runtime_verifier_rejects_adhoc_python_without_library_exception(
+    tmp_path: Path,
+):
+    app, overrides = runtime_fixture(tmp_path)
+    prepared = subprocess.run(
+        ["bash", str(PREPARE), str(app)],
+        env={**os.environ, **overrides},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert prepared.returncode == 0, prepared.stderr + prepared.stdout
+    tools = fake_verification_tools(tmp_path)
+    codesign_tool = Path(tools["YULU_VERIFY_CODESIGN"])
+    codesign_tool.write_text(
+        "#!/usr/bin/env bash\n"
+        "target=${@: -1}\n"
+        "if [[ $* == *'--entitlements'* ]]; then\n"
+        "  if [[ $target == */runtime/python/bin/python3 ]]; then\n"
+        "    echo '<plist><dict></dict></plist>'\n"
+        "  elif [[ $target == */runtime/bin/node ]]; then\n"
+        "    echo '<plist><dict><key>com.apple.security.cs.allow-jit</key><true/><key>com.apple.security.cs.disable-library-validation</key><true/></dict></plist>'\n"
+        "  else\n"
+        "    echo '<plist><dict><key>com.apple.security.device.audio-input</key><true/></dict></plist>'\n"
+        "  fi\n"
+        "elif [[ $* == *'--verbose=2'* ]]; then\n"
+        "  echo 'Signature=adhoc'\n"
+        "  echo 'TeamIdentifier=not set'\n"
+        "fi\n"
+        "exit 0\n",
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        ["bash", str(VERIFY), "--write-inventory", str(app)],
+        env={**os.environ, **tools},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "bundled Python cannot load signed Runtime Packs" in result.stderr
 
 
 def test_release_pipeline_builds_and_rechecks_the_locked_application_runtime():

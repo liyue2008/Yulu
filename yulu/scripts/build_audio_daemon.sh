@@ -266,10 +266,12 @@ fi
 CAPTURE_ENTITLEMENTS="$SCRIPT_DIR/Yulu.app.entitlements"
 SHELL_ENTITLEMENTS="$SCRIPT_DIR/YuluShell.app.entitlements"
 NODE_ENTITLEMENTS="$SCRIPT_DIR/NodeRuntime.entitlements"
+PYTHON_ENTITLEMENTS=""
 if [[ "$IDENTITY" == "-" ]]; then
   # Ad-hoc signatures have no Team ID, so hardened Node cannot otherwise load
   # the separately signed native addon during local builds and smoke tests.
   NODE_ENTITLEMENTS="$SCRIPT_DIR/NodeRuntimeAdHoc.entitlements"
+  PYTHON_ENTITLEMENTS="$SCRIPT_DIR/PythonRuntimeAdHoc.entitlements"
 fi
 codesign --force --options runtime --timestamp \
   --sign "$IDENTITY" "$APP_KEYCHAIN_BIN"
@@ -284,12 +286,21 @@ if [[ -n "$DEVELOPMENT_HOST_NATIVE" ]]; then
     --sign "$IDENTITY" "$DEVELOPMENT_HOST_NATIVE"
 fi
 if [[ "$BUNDLE_APPLICATION_RUNTIME" == "1" ]]; then
+  PYTHON_RUNTIME_EXECUTABLE="$(python3 - "$RES_DIR/runtime/python/bin/python3" <<'PY'
+import os
+import sys
+print(os.path.realpath(sys.argv[1]))
+PY
+)"
   while IFS= read -r -d '' runtime_code; do
     if /usr/bin/file -b "$runtime_code" | grep -q 'Mach-O'; then
       if [[ "$runtime_code" == "$RES_DIR/runtime/bin/node" ]]; then
         codesign --force --options runtime --timestamp \
           --identifier node \
           --entitlements "$NODE_ENTITLEMENTS" --sign "$IDENTITY" "$runtime_code"
+      elif [[ "$runtime_code" == "$PYTHON_RUNTIME_EXECUTABLE" && -n "$PYTHON_ENTITLEMENTS" ]]; then
+        codesign --force --options runtime --timestamp \
+          --entitlements "$PYTHON_ENTITLEMENTS" --sign "$IDENTITY" "$runtime_code"
       else
         codesign --force --options runtime --timestamp --sign "$IDENTITY" "$runtime_code"
       fi
