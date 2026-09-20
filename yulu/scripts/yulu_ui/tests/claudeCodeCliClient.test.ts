@@ -54,7 +54,7 @@ function fakeClaude() {
     '    process.exit(0);',
     '  } else {',
     '    process.stdout.write(`${JSON.stringify({ type: "assistant", session_id: sessionId, message: { content: [{ type: "text", text: answer }] } })}\\n`);',
-    '    process.stdout.write(`${JSON.stringify({ type: "result", subtype: "success", is_error: false, result: answer, session_id: sessionId, uuid: "result-136", modelUsage: { [usageModel]: {} } })}\\n`);',
+    '    process.stdout.write(`${JSON.stringify({ type: "result", subtype: "success", is_error: false, result: answer, session_id: sessionId, uuid: "result-136", modelUsage: { [usageModel]: { provider: process.env.YULU_FAKE_CLAUDE_PROVIDER || "firstParty" } } })}\\n`);',
     '    process.exit(0);',
     '  }',
     '}',
@@ -136,6 +136,8 @@ describe("Claude Code production CLI client", () => {
         "probe-bounds",
         "tools/none",
         "probe-isolation",
+        "managed-hooks/none",
+        "provider-identity",
         "fallback-model/opt-in",
       ],
     });
@@ -207,6 +209,7 @@ describe("Claude Code production CLI client", () => {
       answer: "YULU_CLAUDE_PROBE_OK",
       nativeSessionId: "019f0000-0000-7000-8000-000000000136",
       actualModel: "claude-sonnet-5",
+      actualProvider: "firstParty",
       requestId: "result-136",
       fallbackOccurred: false,
       toolCalls: [],
@@ -233,6 +236,7 @@ describe("Claude Code production CLI client", () => {
       "--no-chrome",
       "--include-hook-events",
       "--system-prompt", "",
+      "--prompt-suggestions", "false",
       "--no-session-persistence",
     ]]);
     expect(readFileSync(fake.stdinLogPath, "utf8")).toBe(
@@ -315,7 +319,8 @@ describe("Claude Code production CLI client", () => {
       terminalStatus: "completed",
       fallbackOccurred: false,
       toolCalls: [],
-      isolationProven: false,
+      isolationProven: true,
+      actualProvider: "firstParty",
     });
     const calls = readFileSync(fake.logPath, "utf8").trim().split("\n").map((line) => JSON.parse(line));
     expect(calls).toEqual([[
@@ -336,11 +341,17 @@ describe("Claude Code production CLI client", () => {
       "--no-chrome",
       "--include-hook-events",
       "--system-prompt", "",
+      "--prompt-suggestions", "false",
       "--no-session-persistence",
     ]]);
     expect(calls.flat()).not.toContain("--max-turns");
     const context = JSON.parse(readFileSync(fake.contextLogPath, "utf8").trim());
     expect(context.cwd).not.toBe(fake.root);
+    expect(context.env).toEqual(expect.arrayContaining([
+      "USER",
+      "LOGNAME",
+      "CLAUDE_CODE_DISABLE_TERMINAL_TITLE",
+    ]));
     expect(context.env).not.toEqual(expect.arrayContaining([
       "YULU_UNRELATED_RECORDING_PATH",
       "ANTHROPIC_API_KEY",
