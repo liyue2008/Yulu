@@ -1,0 +1,13 @@
+yulu/scripts/yulu_ui/src/agentConnections.ts
+  ai_agent 1133-1137,1233-1235
+yulu/scripts/yulu_ui/src/routers/agentTasks.ts
+  ai_agent 35-43
+yulu/scripts/yulu_ui/tests/routers/agentTasks.test.ts
+  ai_agent 67-90,93,101,107-108,110
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.4",
+  "base_commit_sha": "b42c12d7e01afaaef5b8342e17ccdb49d43d82ca",
+  "prompts": {}
+}
