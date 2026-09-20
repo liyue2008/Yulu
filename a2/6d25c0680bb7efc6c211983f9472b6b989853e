@@ -1,0 +1,15 @@
+yulu/scripts/PythonRuntimeAdHoc.entitlements
+  ai_agent 1-8
+packaging/scripts/verify_application_runtime.sh
+  ai_agent 273-277,303-309
+tests/test_application_runtime.py
+  ai_agent 1-2,784,1153-1209
+yulu/scripts/build_audio_daemon.sh
+  ai_agent 269,274,289-294,301-303
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.4",
+  "base_commit_sha": "a26d25c0680bb7efc6c211983f9472b6b989853e",
+  "prompts": {}
+}
