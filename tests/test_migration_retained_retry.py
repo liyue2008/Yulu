@@ -97,9 +97,28 @@ def test_begin_retry_allows_verified_retained_outputs_but_not_normal_retry(
             archive_dir=archive,
             retained_runtime_transaction=str(first["transactionId"]),
         )
+        retry_transaction = str(retry["transactionId"])
+        retry.pop("retryPreflightOnly", None)
+        authority._journal = {
+            **retry,
+            "phase": "rolled_back",
+            "intent": {"action": "rollback-complete"},
+            "jobSnapshot": {label: {} for label in LEGACY_JOB_LABELS},
+            "archiveDirectory": {
+                "device": archive_info.st_dev,
+                "inode": archive_info.st_ino,
+            },
+        }
+        authority._write_journal()
+        chained_retry = authority.begin_retry(
+            archive_dir=archive,
+            retained_runtime_transaction=str(first["transactionId"]),
+        )
 
     assert retry["retainedRuntimeRetryOf"] == first["transactionId"]
     assert retry["transactionOutputIdentities"] == {}
+    assert chained_retry["retryOf"] == retry_transaction
+    assert chained_retry["retainedRuntimeRetryOf"] == first["transactionId"]
 
 
 def test_retained_retry_requires_untampered_recovery_evidence(tmp_path: Path) -> None:
@@ -130,6 +149,17 @@ def test_retained_retry_requires_untampered_recovery_evidence(tmp_path: Path) ->
     (durable / "config.json").write_text('{"source":"current"}', encoding="utf-8")
     journal = json.loads(paths.journal_path.read_text(encoding="utf-8"))
     assert _retained_runtime_retry_transaction(paths, journal) == first["transactionId"]
+    followup = {
+        **journal,
+        "transactionId": "b" * 32,
+        "retryOf": first["transactionId"],
+        "retryRoot": first["transactionId"],
+        "attemptNumber": 2,
+        "retainedRuntimeRetryOf": first["transactionId"],
+    }
+    followup.pop("runtimeInitializationStarted", None)
+    followup.pop("retainedRuntimeOutputs", None)
+    assert _retained_runtime_retry_transaction(paths, followup) == first["transactionId"]
 
     retained = (
         paths.journal_dir

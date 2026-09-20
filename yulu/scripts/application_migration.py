@@ -1360,47 +1360,36 @@ def _retained_runtime_retry_transaction(
     journal: dict[str, object],
 ) -> str | None:
     """Validate retained output evidence before reusing current runtime data."""
-    retained = journal.get("retainedRuntimeOutputs")
-    runtime_started = journal.get("runtimeInitializationStarted")
-    if type(runtime_started) is not bool or not runtime_started or retained is None:
+    if journal.get("phase") != "rolled_back":
         return None
-    transaction_id = journal.get("transactionId")
+
+    current_transaction = journal.get("transactionId")
+    inherited_transaction = journal.get("retainedRuntimeRetryOf")
+    runtime_started = journal.get("runtimeInitializationStarted")
+    retained = journal.get("retainedRuntimeOutputs")
+    if isinstance(inherited_transaction, str):
+        transaction_id = inherited_transaction
+        attempt_number = journal.get("attemptNumber")
+        if (
+            journal.get("retryRoot") != transaction_id
+            or type(attempt_number) is not int
+            or attempt_number < 2
+        ):
+            raise MigrationBlocked("retained runtime retry lineage is invalid")
+        expected_retained = None
+    elif type(runtime_started) is bool and runtime_started and retained is not None:
+        transaction_id = current_transaction
+        expected_retained = retained
+    else:
+        return None
+
     if (
-        journal.get("phase") != "rolled_back"
-        or not isinstance(transaction_id, str)
+        not isinstance(transaction_id, str)
         or re.fullmatch(r"[0-9a-f]{32}", transaction_id) is None
-        or not isinstance(retained, dict)
-        or not retained
-        or any(
-            not isinstance(name, str)
-            or "/" in name
-            or name in {".", ".."}
-            or not isinstance(identity, dict)
-            for name, identity in retained.items()
-        )
     ):
         raise MigrationBlocked("retained runtime retry evidence is invalid")
 
-    standard_names = {
-        destination for _, destination in _ORDINARY_FILE_OUTPUTS
-    } | {
-        destination for _, destination in _DIRECTORY_OUTPUTS
-    } | {
-        name for name, _ in _SQLITE_OUTPUTS
-    }
-    expected_current = set(retained) & standard_names
-    current_presence = {
-        name: _present_kind(paths.durable_root / name) is not None
-        for name in expected_current
-    }
-    if not any(current_presence.values()):
-        return None
-    if not all(current_presence.values()):
-        raise MigrationBlocked("retained runtime data is incomplete")
-
-    recovery = (
-        paths.journal_dir / "retained-runtime-data" / transaction_id
-    )
+    recovery = paths.journal_dir / "retained-runtime-data" / transaction_id
     recovery_fd = _open_existing_private_directory(recovery)
     if recovery_fd < 0:
         raise MigrationBlocked("retained runtime recovery is missing")
@@ -1414,13 +1403,28 @@ def _retained_runtime_retry_transaction(
             )
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise MigrationBlocked("retained runtime recovery changed") from exc
+        manifest_outputs = manifest.get("outputs") if isinstance(manifest, dict) else None
         if (
             not isinstance(manifest, dict)
             or manifest.get("schemaVersion") != 1
             or manifest.get("transactionId") != transaction_id
-            or manifest.get("outputs") != retained
+            or not isinstance(manifest_outputs, dict)
+            or not manifest_outputs
+            or (
+                expected_retained is not None
+                and manifest_outputs != expected_retained
+            )
         ):
             raise MigrationBlocked("retained runtime recovery changed")
+        retained = manifest_outputs
+        if any(
+            not isinstance(name, str)
+            or "/" in name
+            or name in {".", ".."}
+            or not isinstance(identity, dict)
+            for name, identity in retained.items()
+        ):
+            raise MigrationBlocked("retained runtime retry evidence is invalid")
         for name, expected in retained.items():
             observed = (
                 _directory_identity_at(recovery_fd, name)
@@ -1438,6 +1442,23 @@ def _retained_runtime_retry_transaction(
                 raise MigrationBlocked("retained runtime recovery changed")
     finally:
         os.close(recovery_fd)
+
+    standard_names = {
+        destination for _, destination in _ORDINARY_FILE_OUTPUTS
+    } | {
+        destination for _, destination in _DIRECTORY_OUTPUTS
+    } | {
+        name for name, _ in _SQLITE_OUTPUTS
+    }
+    expected_current = set(retained) & standard_names
+    current_presence = {
+        name: _present_kind(paths.durable_root / name) is not None
+        for name in expected_current
+    }
+    if not any(current_presence.values()):
+        return None
+    if not all(current_presence.values()):
+        raise MigrationBlocked("retained runtime data is incomplete")
 
     # The restored legacy runtime may have continued writing the durable data.
     # Validate its current shape and SQLite integrity without comparing it to
@@ -3452,11 +3473,24 @@ class ApplicationMigration:
             raise MigrationBlocked("retry preflight journal metadata is invalid")
         retained_runtime_retry = retained_runtime_transaction is not None
         runtime_initialized = previous.get("runtimeInitializationStarted")
+        previous_retained_transaction = previous.get("retainedRuntimeRetryOf")
+        expected_retained_transaction = (
+            previous_retained_transaction
+            if isinstance(previous_retained_transaction, str)
+            else previous_transaction
+        )
+        direct_retained_evidence = (
+            type(runtime_initialized) is bool
+            and runtime_initialized
+            and isinstance(previous.get("retainedRuntimeOutputs"), dict)
+        )
+        inherited_retained_evidence = (
+            isinstance(previous_retained_transaction, str)
+            and previous.get("retryRoot") == previous_retained_transaction
+        )
         if retained_runtime_retry and (
-            retained_runtime_transaction != previous_transaction
-            or type(runtime_initialized) is not bool
-            or not runtime_initialized
-            or not isinstance(previous.get("retainedRuntimeOutputs"), dict)
+            retained_runtime_transaction != expected_retained_transaction
+            or not (direct_retained_evidence or inherited_retained_evidence)
         ):
             raise MigrationBlocked("retained runtime retry binding is invalid")
         previous_attempt = previous.get("attemptNumber", 1)
@@ -3480,7 +3514,7 @@ class ApplicationMigration:
             "retryPreflightOnly": True,
             "transactionOutputIdentities": {},
             **(
-                {"retainedRuntimeRetryOf": previous_transaction}
+                {"retainedRuntimeRetryOf": expected_retained_transaction}
                 if retained_runtime_retry
                 else {}
             ),
