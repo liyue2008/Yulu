@@ -75,6 +75,14 @@ DEFAULT_CONFIG = {
     "dedicated_meeting_apps": [
         "zoom.us", "Zoom", "腾讯会议", "TencentMeeting", "VooV Meeting", "WeMeet"
     ],
+    "process_app_names": [
+        "LarkSuite.app", "/Lark", "Feishu",
+    ],
+    "meeting_process_keywords": [
+        "byteview", "--scene=vc", "--scene=meeting",
+        "--module=renderer-byteview", "--module=renderer-meeting",
+    ],
+    "auto_record_apps": [],
     "ignore_window_keywords": [
         "Calendar", "日历", "Gmail", "Inbox", "Settings", "Preferences",
         "聊天", "通讯录", "朋友圈", "文件传输助手",
@@ -229,8 +237,47 @@ def collect_visible_apps():
     return [a.replace("_", " ") for a in apps]
 
 
+def collect_running_process_commands():
+    """Return process command lines without requiring Accessibility or admin."""
+    result = subprocess.run(
+        ["/bin/ps", "-ww", "-axo", "command="],
+        capture_output=True,
+        text=True,
+        timeout=5,
+    )
+    if result.returncode != 0:
+        raise RuntimeError("process enumeration failed")
+    return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+
+
 def _compile_patterns(words):
     return [re.compile(re.escape(w), re.I) for w in words if w]
+
+
+def _detect_meeting_process(cfg):
+    try:
+        commands = collect_running_process_commands()
+    except (OSError, RuntimeError, subprocess.TimeoutExpired):
+        return None
+    app_patterns = _compile_patterns(cfg.get("process_app_names", []))
+    meeting_patterns = _compile_patterns(cfg.get("meeting_process_keywords", []))
+    if not app_patterns or not meeting_patterns:
+        return None
+    for command in commands:
+        if not any(pattern.search(command) for pattern in app_patterns):
+            continue
+        if not any(pattern.search(command) for pattern in meeting_patterns):
+            continue
+        app = "Lark" if re.search(r"Lark|Feishu", command, re.I) else "Meeting app"
+        return {
+            "active": True,
+            "title": f"{app} Meeting",
+            "app": app,
+            "window": "",
+            "signature": signature(app, "meeting-process"),
+            "fallback": "meeting_process",
+        }
+    return None
 
 
 def _detect_running_meeting_app(cfg, ignore_patterns, window_patterns):
@@ -295,6 +342,10 @@ def detect_meeting(cfg):
             "signature": signature(best.get("app", ""), title),
             "matches": matches[:5],
         }
+
+    process_match = _detect_meeting_process(cfg)
+    if process_match is not None:
+        return process_match
 
     running_match = _detect_running_meeting_app(cfg, ignore_patterns, window_patterns)
     if running_match is not None:
@@ -391,14 +442,32 @@ def mark_prompted(state, sig):
     save_state(state)
 
 
-def prompt_recording(title):
+def _launch_recording_command(arguments):
     daemon = SCRIPT_DIR / "meeting_daemon.py"
     subprocess.Popen(
-        [sys.executable, str(daemon), "ask_record", title, f"detected::{signature('', title)}"],
+        [sys.executable, str(daemon), *arguments],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         start_new_session=os.environ.get("YULU_MANAGED_REMINDERS") != "1",
     )
+
+
+def prompt_recording(title):
+    _launch_recording_command([
+        "ask_record",
+        title,
+        f"detected::{signature('', title)}",
+    ])
+
+
+def dispatch_recording(cfg, result, title):
+    auto_patterns = _compile_patterns(cfg.get("auto_record_apps", []))
+    app = str(result.get("app", ""))
+    if auto_patterns and any(pattern.search(app) for pattern in auto_patterns):
+        _launch_recording_command(["start", title])
+        return "automatic"
+    prompt_recording(title)
+    return "prompt"
 
 
 def run_once(args):
@@ -476,8 +545,8 @@ def run_daemon(args):
 
             title = f"检测到会议：{res.get('title', '会议')}"
             mark_prompted(state, sig)
-            log(f"🔔 prompt recording: {title}")
-            prompt_recording(title)
+            dispatch = dispatch_recording(cfg, res, title)
+            log(f"🔔 {dispatch} recording: {title}")
             time.sleep(interval)
     finally:
         with suppress(Exception):

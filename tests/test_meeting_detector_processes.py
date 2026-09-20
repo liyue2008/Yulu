@@ -21,6 +21,71 @@ def test_meeting_detector_uses_running_meeting_app_when_titles_are_unavailable()
     assert result["fallback"] == "running_process"
 
 
+def test_meeting_detector_uses_lark_meeting_process_without_accessibility() -> None:
+    config = dict(meeting_detector.DEFAULT_CONFIG)
+    with (
+        patch.object(meeting_detector, "collect_windows", return_value=[]),
+        patch.object(
+            meeting_detector,
+            "collect_running_process_commands",
+            return_value=[
+                "/Applications/LarkSuite.app/Contents/Frameworks/Lark Helper "
+                "--type=renderer --scene=byteview",
+            ],
+        ),
+        patch.object(meeting_detector, "collect_visible_apps", return_value=["Lark"]),
+    ):
+        result = meeting_detector.detect_meeting(config)
+
+    assert result == {
+        "active": True,
+        "title": "Lark Meeting",
+        "app": "Lark",
+        "window": "",
+        "signature": meeting_detector.signature("Lark", "meeting-process"),
+        "fallback": "meeting_process",
+    }
+
+
+def test_lark_main_process_alone_does_not_look_like_a_meeting() -> None:
+    config = dict(meeting_detector.DEFAULT_CONFIG)
+    with (
+        patch.object(meeting_detector, "collect_windows", return_value=[]),
+        patch.object(
+            meeting_detector,
+            "collect_running_process_commands",
+            return_value=["/Applications/LarkSuite.app/Contents/MacOS/Lark"],
+        ),
+        patch.object(meeting_detector, "collect_visible_apps", return_value=["Lark"]),
+    ):
+        result = meeting_detector.detect_meeting(config)
+
+    assert result["active"] is False
+
+
+def test_lark_auto_record_dispatches_start_without_a_prompt() -> None:
+    config = {**meeting_detector.DEFAULT_CONFIG, "auto_record_apps": ["Lark"]}
+    calls = []
+    with patch.object(
+        meeting_detector.subprocess,
+        "Popen",
+        side_effect=lambda arguments, **options: calls.append((arguments, options)),
+    ):
+        mode = meeting_detector.dispatch_recording(
+            config,
+            {"app": "Lark"},
+            "检测到会议：Lark Meeting",
+        )
+
+    assert mode == "automatic"
+    assert calls[0][0] == [
+        meeting_detector.sys.executable,
+        str(meeting_detector.SCRIPT_DIR / "meeting_daemon.py"),
+        "start",
+        "检测到会议：Lark Meeting",
+    ]
+
+
 def test_meeting_detector_does_not_request_accessibility_when_no_meeting_app_runs() -> None:
     config = dict(meeting_detector.DEFAULT_CONFIG)
     with (
