@@ -1,11 +1,15 @@
+# pyright: reportMissingImports=false
+
 import json
 import stat
 import sys
-import pytest
+from email.message import Message
 from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
 from urllib.error import HTTPError, URLError
+
+import pytest
 
 SCRIPTS = Path(__file__).resolve().parents[1] / "yulu" / "scripts"
 sys.path.insert(0, str(SCRIPTS))
@@ -146,7 +150,7 @@ def test_policy_disabled_completion_is_permanently_acknowledged_without_spooling
         meeting_daemon,
         "urlopen",
         lambda request, timeout: (_ for _ in ()).throw(
-            HTTPError(request.full_url, 409, "Conflict", {}, body)
+            HTTPError(request.full_url, 409, "Conflict", Message(), body)
         ),
     )
 
@@ -179,14 +183,15 @@ def test_recording_completion_never_carries_legacy_automatic_share_intent(monkey
     cfg.write_text(json.dumps({
         "agent_pipeline": {"auto_send_notion": False},
     }), encoding="utf-8")
-    assert "sendToNotion" not in meeting_daemon._recording_completed_payload("/tmp/a.wav", "A")
-    assert meeting_daemon._recording_completed_payload("/tmp/a.wav", "A")["language"] == "zh"
+    audio = str(tmp_path / "a.wav")
+    assert "sendToNotion" not in meeting_daemon._recording_completed_payload(audio, "A")
+    assert meeting_daemon._recording_completed_payload(audio, "A")["language"] == "zh"
 
     cfg.write_text(json.dumps({"agent_pipeline": {"auto_send_notion": True}}), encoding="utf-8")
-    assert "sendToNotion" not in meeting_daemon._recording_completed_payload("/tmp/a.wav", "A")
+    assert "sendToNotion" not in meeting_daemon._recording_completed_payload(audio, "A")
 
     cfg.write_text("{}", encoding="utf-8")
-    assert "sendToNotion" not in meeting_daemon._recording_completed_payload("/tmp/a.wav", "A")
+    assert "sendToNotion" not in meeting_daemon._recording_completed_payload(audio, "A")
 
 
 def test_realtime_request_freezes_configured_language_and_uses_bearer_token(monkeypatch, tmp_path):
@@ -213,8 +218,9 @@ def test_realtime_request_freezes_configured_language_and_uses_bearer_token(monk
     monkeypatch.setattr(meeting_daemon, "urlopen", fake_urlopen)
 
     language = meeting_daemon._transcription_language()
+    audio = str(tmp_path / "meeting.wav")
     assert meeting_daemon._post_realtime("start", {
-        "audioPath": "/tmp/meeting.wav",
+        "audioPath": audio,
         "title": "日本語会議",
         "language": language,
     }) is True
@@ -222,7 +228,7 @@ def test_realtime_request_freezes_configured_language_and_uses_bearer_token(monk
         "url": "http://127.0.0.1:8123/api/recordings/realtime/start",
         "authorization": "Bearer secret",
         "payload": {
-            "audioPath": "/tmp/meeting.wav",
+            "audioPath": audio,
             "title": "日本語会議",
             "language": "ja",
         },
@@ -276,7 +282,7 @@ def test_auto_stop_distinguishes_user_choice_from_timeout(monkeypatch):
     reasons = []
     reminders = []
     monkeypatch.setattr(meeting_daemon, "_add_runtime_event", reminders.append)
-    monkeypatch.setattr(meeting_daemon, "load_state", lambda: {})
+    monkeypatch.setattr(meeting_daemon, "load_state", dict)
     monkeypatch.setattr(
         meeting_daemon,
         "recording_info",
@@ -304,7 +310,7 @@ def test_auto_stop_continue_schedules_the_next_prompt(monkeypatch):
     import meeting_daemon
 
     events = []
-    monkeypatch.setattr(meeting_daemon, "load_state", lambda: {})
+    monkeypatch.setattr(meeting_daemon, "load_state", dict)
     monkeypatch.setattr(
         meeting_daemon,
         "recording_info",
@@ -331,10 +337,33 @@ def test_auto_stop_continue_schedules_the_next_prompt(monkeypatch):
     assert events[0]["title"] == "Team Sync"
 
 
+def test_detector_stop_is_bound_to_the_same_automatic_recording(monkeypatch):
+    import meeting_daemon
+
+    reasons = []
+    monkeypatch.setattr(meeting_daemon, "load_state", dict)
+    monkeypatch.setattr(
+        meeting_daemon,
+        "recording_info",
+        lambda _state: {"meeting_id": "detected::current"},
+    )
+    monkeypatch.setattr(
+        meeting_daemon,
+        "_stop_and_process",
+        lambda stop_reason="manual": reasons.append(stop_reason) or True,
+    )
+
+    meeting_daemon.cmd_stop_detected(["detected::stale"])
+    assert reasons == []
+
+    meeting_daemon.cmd_stop_detected(["detected::current"])
+    assert reasons == ["automatic"]
+
+
 def test_auto_stop_without_active_recording_is_a_noop(monkeypatch, capsys):
     import meeting_daemon
 
-    monkeypatch.setattr(meeting_daemon, "load_state", lambda: {})
+    monkeypatch.setattr(meeting_daemon, "load_state", dict)
     monkeypatch.setattr(meeting_daemon, "recording_info", lambda _state: None)
     monkeypatch.setattr(
         meeting_daemon.subprocess,
@@ -397,9 +426,11 @@ def test_status_window_detaches_from_parent_session(monkeypatch, tmp_path, bundl
     assert json.loads(state_path.read_text(encoding="utf-8"))["_status_pid"] == 12345
 
 
-def test_start_recording_uses_capture_controller(monkeypatch):
+def test_start_recording_uses_capture_controller(monkeypatch, tmp_path):
     import meeting_daemon
     import record_audio
+
+    audio = str(tmp_path / "meeting.wav")
 
     class FakeCaptureController:
         def __init__(self):
@@ -411,24 +442,24 @@ def test_start_recording_uses_capture_controller(monkeypatch):
 
         def start(self, payload):
             self.calls.append(("start", payload))
-            return {"status": "recording", "file": "/tmp/meeting.wav"}
+            return {"status": "recording", "file": audio}
 
     ctrl = FakeCaptureController()
     monkeypatch.setattr(record_audio, "_capture_controller", lambda: ctrl)
     monkeypatch.setattr(record_audio, "socket_send", lambda cmd: (_ for _ in ()).throw(AssertionError("socket_send bypassed seam")))
 
-    assert meeting_daemon._daemon_start_recording("Team Sync") == "/tmp/meeting.wav"
+    assert meeting_daemon._daemon_start_recording("Team Sync") == audio
     assert ctrl.calls == [
         ("status", None),
         ("start", {"title": "Team Sync"}),
     ]
 
 
-def test_old_stop_prompt_cannot_end_a_new_recording(monkeypatch):
+def test_old_stop_prompt_cannot_end_a_new_recording(monkeypatch, tmp_path):
     import meeting_daemon
     states = iter([
-        {"title": "Same meeting", "meeting_id": "meeting1", "audio_path": "/old.wav", "started_at": "before"},
-        {"title": "Same meeting", "meeting_id": "meeting1", "audio_path": "/new.wav", "started_at": "after"},
+        {"title": "Same meeting", "meeting_id": "meeting1", "audio_path": str(tmp_path / "old.wav"), "started_at": "before"},
+        {"title": "Same meeting", "meeting_id": "meeting1", "audio_path": str(tmp_path / "new.wav"), "started_at": "after"},
     ])
     monkeypatch.setattr(meeting_daemon, "load_state", lambda: next(states))
     monkeypatch.setattr(meeting_daemon, "recording_info", lambda state: state)

@@ -35,6 +35,7 @@ from application_paths import (
 )
 from state_store import is_recording_active as state_recording_active
 from state_store import load_state as load_recording_state
+from state_store import recording_info
 
 CONFIG_DIR = DURABLE_DATA_DIR
 STATE_PATH = CONFIG_DIR / ".detector_state.json"
@@ -85,6 +86,7 @@ DEFAULT_CONFIG = {
     ],
     "auto_record_apps": [],
     "lark_cli_active_meeting": False,
+    "auto_stop_grace_sec": 10,
     "ignore_window_keywords": [
         "Calendar", "日历", "Gmail", "Inbox", "Settings", "Preferences",
         "聊天", "通讯录", "朋友圈", "文件传输助手",
@@ -536,14 +538,101 @@ def prompt_recording(title):
     ])
 
 
+def detected_meeting_id(result):
+    detected_signature = str(result.get("signature", "")).strip()
+    return f"detected::{detected_signature}" if detected_signature else ""
+
+
 def dispatch_recording(cfg, result, title):
     auto_patterns = _compile_patterns(cfg.get("auto_record_apps", []))
     app = str(result.get("app", ""))
-    if auto_patterns and any(pattern.search(app) for pattern in auto_patterns):
-        _launch_recording_command(["start", title])
+    meeting_id = detected_meeting_id(result)
+    if meeting_id and auto_patterns and any(pattern.search(app) for pattern in auto_patterns):
+        _launch_recording_command(["start", title, meeting_id])
         return "automatic"
     prompt_recording(title)
     return "prompt"
+
+
+def _recording_matches(meeting_id):
+    try:
+        current = recording_info(load_recording_state(RECORDING_STATE_PATH))
+    except Exception:
+        return False
+    return bool(current and current.get("meeting_id") == meeting_id)
+
+
+def stop_detected_recording(meeting_id):
+    daemon = SCRIPT_DIR / "meeting_daemon.py"
+    try:
+        result = subprocess.run(
+            [sys.executable, str(daemon), "stop_detected", meeting_id],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return result.returncode == 0
+
+
+def handle_auto_recording_lifecycle(cfg, result, state, now):
+    marker = state.get("auto_recording")
+    if not isinstance(marker, dict):
+        return False
+    meeting_id = marker.get("meeting_id")
+    detected_signature = marker.get("signature")
+    if not isinstance(meeting_id, str) or not meeting_id.startswith("detected::"):
+        state.pop("auto_recording", None)
+        save_state(state)
+        return False
+    recording_matches = _recording_matches(meeting_id)
+    if result.get("active") and result.get("signature") == detected_signature:
+        started_at = marker.get("started_at")
+        try:
+            start_age = (
+                now - float(started_at)
+                if isinstance(started_at, (int, float, str))
+                else 0
+            )
+        except ValueError:
+            start_age = 0
+        if not recording_matches and start_age > 15:
+            state.pop("auto_recording", None)
+            save_state(state)
+        elif "missing_since" in marker:
+            marker.pop("missing_since", None)
+            save_state(state)
+        return False
+    if not recording_matches:
+        state.pop("auto_recording", None)
+        save_state(state)
+        return False
+    missing_since = marker.get("missing_since")
+    if missing_since is None:
+        marker["missing_since"] = now
+        save_state(state)
+        return False
+    try:
+        if not isinstance(missing_since, (int, float, str)):
+            raise ValueError("invalid missing_since")
+        missing_seconds = now - float(missing_since)
+        grace_value = cfg.get("auto_stop_grace_sec", 10)
+        if not isinstance(grace_value, (int, float, str)):
+            raise ValueError("invalid auto_stop_grace_sec")
+        grace_seconds = max(0, int(grace_value))
+    except (TypeError, ValueError):
+        marker["missing_since"] = now
+        save_state(state)
+        return False
+    if missing_seconds < grace_seconds:
+        return False
+    if not stop_detected_recording(meeting_id):
+        return False
+    state.pop("auto_recording", None)
+    save_state(state)
+    log(f"⏹ automatic stop: {meeting_id}")
+    return True
 
 
 def run_once(args):
@@ -586,6 +675,12 @@ def run_daemon(args):
 
             res = detect_meeting(cfg)
             now = time.time()
+            state = load_state()
+            if handle_auto_recording_lifecycle(cfg, res, state, now):
+                active_since = None
+                active_sig = None
+                time.sleep(interval)
+                continue
 
             hint = res.get("permission_hint")
             if hint and now - last_permission_error > 300:
@@ -614,7 +709,6 @@ def run_daemon(args):
                 time.sleep(interval)
                 continue
 
-            state = load_state()
             if recently_prompted(state, sig, cooldown):
                 time.sleep(interval)
                 continue
@@ -622,6 +716,13 @@ def run_daemon(args):
             title = f"检测到会议：{res.get('title', '会议')}"
             mark_prompted(state, sig)
             dispatch = dispatch_recording(cfg, res, title)
+            if dispatch == "automatic":
+                state["auto_recording"] = {
+                    "meeting_id": detected_meeting_id(res),
+                    "signature": sig,
+                    "started_at": now,
+                }
+                save_state(state)
             log(f"🔔 {dispatch} recording: {title}")
             time.sleep(interval)
     finally:
