@@ -128,15 +128,19 @@ v0.25.0 优化语音输入和随时问，自动输入失败时保留识别文字
 修改迁移日志或清空权限来绕过错误。服务连接测试成功，不代表录音包含声音或转写与纪要已完成提交。
 
 打开 [GitHub Releases](https://github.com/Nowhitestar/Yulu/releases)，选择当前公告的
-稳定版或公开候选版，下载对应的 `yulu-macos-arm64-vX.Y.Z.dmg`，打开后把
-`Yulu.app` 拖到 `/Applications` 别名。启动 `/Applications/Yulu.app`；自包含 App
-会打开设置流程，并引导授权三项 macOS 权限：
+稳定版或公开候选版，下载对应的 `yulu-macos-arm64-vX.Y.Z.dmg`。把 `Yulu.app`
+安装到 `/Applications`；没有管理员权限时，也可以安装到当前用户的
+`~/Applications`。随后启动 Yulu，自包含 App 会打开设置流程，并引导授权所需的
+macOS 权限：
 
 | 组件 | 权限 | 用途 |
 |---|---|---|
 | `Yulu.app` | 麦克风 | 录制本机麦克风 |
 | `Yulu.app` | 屏幕与系统音频录制 | 通过 ScreenCaptureKit 捕获会议声音 |
-| `window_scanner` | 辅助功能 | 检测受支持的会议窗口与标题 |
+
+会议软件自动检测直接检查当前用户正在运行的 App，无需辅助功能权限。如果用户
+此前已授权辅助功能，窗口标题可用于提高检测精度；会议扫描器本身不会主动弹出
+授权请求。
 
 菜单栏、全局快捷键与录音控制由 `Yulu.app` 自身提供，无需另装 StatusAgent。
 关闭主窗口后这些控制仍可用；退出 Yulu 后需重新打开 App。使用自动粘贴或模拟

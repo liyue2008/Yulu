@@ -143,10 +143,13 @@ class Scheduler:
                     "ask_record", ev.get("title", ""), ev.get("meeting_id", ""),
                 ])
             elif kind == "ask_stop":
-                self._spawn([
+                command = [
                     sys.executable, str(SCRIPT_DIR / "meeting_daemon.py"),
                     "auto_stop",
-                ])
+                ]
+                if ev.get("id"):
+                    command.append(str(ev["id"]))
+                self._spawn(command)
             else:
                 log(f"⚠️ 未知事件类型: {kind}")
         except Exception as e:

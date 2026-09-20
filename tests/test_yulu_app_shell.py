@@ -2053,7 +2053,7 @@ def test_shell_allows_product_startup_only_from_applications(tmp_path: Path):
             "installed": False,
             "persistentRegistrationAllowed": False,
             "componentsStarted": False,
-            "guidance": "Drag Yulu to Applications before opening it.",
+            "guidance": "Move Yulu to /Applications or ~/Applications before opening it.",
         }
 
 

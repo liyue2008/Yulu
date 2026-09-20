@@ -167,16 +167,21 @@ permissions as a workaround. A successful provider connection test does not
 prove that a recording contains sound or has committed transcript and summary.
 
 Open [GitHub Releases](https://github.com/Nowhitestar/Yulu/releases), choose the
-currently advertised stable release or public release candidate, download its
-`yulu-macos-arm64-vX.Y.Z.dmg`, and drag `Yulu.app` onto the `/Applications`
-alias. Launch `/Applications/Yulu.app`; the self-contained App opens the setup
-flow and guides you through the three macOS permissions it needs:
+currently advertised stable release or public release candidate, and download its
+`yulu-macos-arm64-vX.Y.Z.dmg`. Install `Yulu.app` in `/Applications`, or in
+`~/Applications` when you do not have administrator access, then launch it. The
+self-contained App opens the setup flow and guides you through the macOS permissions
+it needs:
 
 | Component | Permission | Why |
 |---|---|---|
 | `Yulu.app` | Microphone | Capture your microphone |
 | `Yulu.app` | Screen & System Audio Recording | Capture meeting playback with ScreenCaptureKit |
-| `window_scanner` | Accessibility | Detect supported meeting windows and titles |
+
+Automatic meeting-app detection checks the current user's running applications
+and does not request Accessibility permission. If Accessibility was already
+granted, window titles may improve detection, but Yulu never prompts for it from
+the meeting scanner.
 
 The App also owns its recording controls and dictation hotkeys; there is no
 separate StatusAgent to install. Closing the window keeps them available, while
