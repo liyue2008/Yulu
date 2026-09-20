@@ -92,8 +92,17 @@ describe("settingsRegistry", () => {
       expect(reloadFor(p)).toEqual({ kind: "restart", daemons: ["detector"] });
     }
   });
-  it("meeting_detection 5 个大数组是 command 类型、restart detector、标 advanced(P3-2)", () => {
-    for (const p of ["meeting_detection.window_keywords", "meeting_detection.app_name_hints", "meeting_detection.target_app_names", "meeting_detection.dedicated_meeting_apps", "meeting_detection.ignore_window_keywords"]) {
+  it("meeting_detection 大数组是 command 类型、restart detector、标 advanced(P3-2)", () => {
+    for (const p of [
+      "meeting_detection.window_keywords",
+      "meeting_detection.app_name_hints",
+      "meeting_detection.target_app_names",
+      "meeting_detection.dedicated_meeting_apps",
+      "meeting_detection.process_app_names",
+      "meeting_detection.meeting_process_keywords",
+      "meeting_detection.auto_record_apps",
+      "meeting_detection.ignore_window_keywords",
+    ]) {
       const def = defFor(p);
       expect(def?.type).toBe("command");
       expect(def?.advanced).toBe(true);

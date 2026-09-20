@@ -123,6 +123,14 @@
     "dedicated_meeting_apps": [
       "zoom.us", "Zoom", "腾讯会议", "TencentMeeting", "VooV Meeting", "WeMeet"
     ],
+    "process_app_names": [
+      "LarkSuite.app", "/Lark", "Feishu"
+    ],
+    "meeting_process_keywords": [
+      "byteview", "--scene=vc", "--scene=meeting",
+      "--module=renderer-byteview", "--module=renderer-meeting"
+    ],
+    "auto_record_apps": [],
     "ignore_window_keywords": [
       "Calendar", "日历", "Gmail", "Inbox", "Settings", "Preferences",
       "聊天", "通讯录", "朋友圈", "文件传输助手",
