@@ -121,7 +121,10 @@ def test_lark_auto_record_dispatches_start_without_a_prompt() -> None:
     ):
         mode = meeting_detector.dispatch_recording(
             config,
-            {"app": "Lark"},
+            {
+                "app": "Lark",
+                "signature": meeting_detector.signature("Lark", "meeting-process"),
+            },
             "检测到会议：Lark Meeting",
         )
 
@@ -131,7 +134,69 @@ def test_lark_auto_record_dispatches_start_without_a_prompt() -> None:
         str(meeting_detector.SCRIPT_DIR / "meeting_daemon.py"),
         "start",
         "检测到会议：Lark Meeting",
+        f"detected::{meeting_detector.signature('Lark', 'meeting-process')}",
     ]
+
+
+def test_auto_recording_stops_after_the_same_meeting_disappears() -> None:
+    meeting_id = "detected::lark-signature"
+    state = {
+        "prompted": {},
+        "auto_recording": {
+            "meeting_id": meeting_id,
+            "signature": "lark-signature",
+            "started_at": 50.0,
+        },
+    }
+    saved = []
+    config = {**meeting_detector.DEFAULT_CONFIG, "auto_stop_grace_sec": 8}
+    with (
+        patch.object(meeting_detector, "_recording_matches", return_value=True),
+        patch.object(meeting_detector, "stop_detected_recording", return_value=True) as stop,
+        patch.object(meeting_detector, "save_state", side_effect=lambda value: saved.append(dict(value))),
+    ):
+        assert meeting_detector.handle_auto_recording_lifecycle(
+            config,
+            {"active": False},
+            state,
+            100.0,
+        ) is False
+        assert state["auto_recording"]["missing_since"] == 100.0
+        assert meeting_detector.handle_auto_recording_lifecycle(
+            config,
+            {"active": False},
+            state,
+            109.0,
+        ) is True
+
+    stop.assert_called_once_with(meeting_id)
+    assert "auto_recording" not in state
+    assert saved
+
+
+def test_auto_stop_never_stops_a_different_or_manual_recording() -> None:
+    state = {
+        "auto_recording": {
+            "meeting_id": "detected::old",
+            "signature": "old",
+            "started_at": 1.0,
+            "missing_since": 2.0,
+        },
+    }
+    with (
+        patch.object(meeting_detector, "_recording_matches", return_value=False),
+        patch.object(meeting_detector, "stop_detected_recording") as stop,
+        patch.object(meeting_detector, "save_state"),
+    ):
+        assert meeting_detector.handle_auto_recording_lifecycle(
+            meeting_detector.DEFAULT_CONFIG,
+            {"active": False},
+            state,
+            100.0,
+        ) is False
+
+    stop.assert_not_called()
+    assert "auto_recording" not in state
 
 
 def test_meeting_detector_does_not_request_accessibility_when_no_meeting_app_runs() -> None:

@@ -94,6 +94,7 @@ describe("settingsRegistry", () => {
       "meeting_detection.stable_sec",
       "meeting_detection.prompt_cooldown_sec",
       "meeting_detection.lark_cli_active_meeting",
+      "meeting_detection.auto_stop_grace_sec",
     ]) {
       expect(reloadFor(p)).toEqual({ kind: "restart", daemons: ["detector"] });
     }

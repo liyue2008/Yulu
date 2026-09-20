@@ -18,6 +18,7 @@
   ask_record <title> <meeting_id>          会议开始时弹窗询问是否录制（由调度器 fire）
   auto_stop                                录制超时弹窗询问是否停止（由调度器 fire）
   stop                                     立即停止录制并生成纪要
+  stop_detected <meeting_id>               仅停止同一 detector 自动启动的录制
   detect [once|daemon]                     检测当前是否处于会议/通话场景
 """
 
@@ -804,6 +805,20 @@ def cmd_auto_stop(event_id=None):
         print(f"⏭ 继续录制，{end_at.strftime('%H:%M')} 再次询问")
 
 
+def cmd_stop_detected(args):
+    expected_meeting_id = args[0] if args else ""
+    if not expected_meeting_id.startswith("detected::"):
+        print("忽略无效的 detector 停止请求")
+        return
+    current = recording_info(load_state())
+    if not current or current.get("meeting_id") != expected_meeting_id:
+        print("录音不属于当前 detector 会议，忽略自动停止")
+        return
+    print(f"⏹️ detector 自动停止录制: {expected_meeting_id}")
+    if not _stop_and_process(stop_reason="automatic"):
+        raise SystemExit(1)
+
+
 def cmd_stop():
     print("🛑 手动停止录制")
     if not _stop_and_process():
@@ -961,7 +976,10 @@ def main():
     args = sys.argv[2:]
     handlers = {
         "schedule": lambda: cmd_schedule(),
-        "start": lambda: _start_recording(args[0] if args else "未命名会议"),
+        "start": lambda: _start_recording(
+            args[0] if args else "未命名会议",
+            args[1] if len(args) > 1 else "",
+        ),
         "start_meeting": lambda: cmd_start_meeting(args),
         "current_meeting": lambda: cmd_current_meeting(),
         "prompt_action": lambda: cmd_prompt_action(args),
@@ -972,6 +990,7 @@ def main():
         "ask_record": lambda: cmd_ask_record(args),
         "auto_stop": lambda: cmd_auto_stop(args[0] if args else None),
         "stop": lambda: cmd_stop(),
+        "stop_detected": lambda: cmd_stop_detected(args),
         "detect": lambda: subprocess.run([
             sys.executable,
             str(SCRIPT_DIR / "meeting_detector.py"),
