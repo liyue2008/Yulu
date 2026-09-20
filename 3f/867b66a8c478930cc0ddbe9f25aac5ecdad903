@@ -1,0 +1,11 @@
+yulu/scripts/yulu_ui/src/claudeCodeCliClient.ts
+  ai_agent 37-40,135-136,150,197-202,279,315-319,356-363,371
+yulu/scripts/yulu_ui/tests/claudeCodeCliClient.test.ts
+  ai_agent 57,139-140,212,239,322-323,344,350-354
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.4",
+  "base_commit_sha": "3f867b66a8c478930cc0ddbe9f25aac5ecdad903",
+  "prompts": {}
+}
