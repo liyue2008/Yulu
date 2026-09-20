@@ -1,0 +1,15 @@
+yulu/scripts/local_caption_runtime_pack.json
+  ai_agent 9
+yulu/scripts/sherpa_caption_worker.py
+  ai_agent 31-37,57,83-86,131,141-144
+tests/test_local_caption_runtime.py
+  ai_agent 1-2,13,170,254-304
+yulu/scripts/local_caption_runtime.py
+  ai_agent 21,87-90,99,205-206,209-215,217-218,367-373,392-402,404-423,432,440,444,472-476,478-479,493-494,496-497,500-504,533-534
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.4",
+  "base_commit_sha": "2bdcf2eeb446fa156e7ea77e5b04a78636be9c22",
+  "prompts": {}
+}
