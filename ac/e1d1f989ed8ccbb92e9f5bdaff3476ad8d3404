@@ -1,0 +1,11 @@
+yulu/scripts/application_migration.py
+  ai_agent 1363-1367,1369-1383,1385,1387,1392,1406,1411-1416,1419-1427,1446-1462,3476-3490,3492-3493,3517
+tests/test_migration_retained_retry.py
+  ai_agent 100-116,120-121,152-162
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.4",
+  "base_commit_sha": "ace1d1f989ed8ccbb92e9f5bdaff3476ad8d3404",
+  "prompts": {}
+}
