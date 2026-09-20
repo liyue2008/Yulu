@@ -270,6 +270,11 @@ NODE_ENTITLEMENTS="$($CODESIGN_TOOL --display --entitlements :- "$RUNTIME/bin/no
   fail "could not read bundled Node entitlements"
 NODE_SIGNATURE="$($CODESIGN_TOOL --display --verbose=2 "$RUNTIME/bin/node" 2>&1)" || \
   fail "could not read bundled Node signature metadata"
+PYTHON="$RUNTIME/python/bin/python3"
+PYTHON_ENTITLEMENTS="$($CODESIGN_TOOL --display --entitlements :- "$PYTHON" 2>&1)" || \
+  fail "could not read bundled Python entitlements"
+PYTHON_SIGNATURE="$($CODESIGN_TOOL --display --verbose=2 "$PYTHON" 2>&1)" || \
+  fail "could not read bundled Python signature metadata"
 entitlement_is_true() {
   python3 -c '
 import plistlib
@@ -295,6 +300,13 @@ if [[ "$NODE_SIGNATURE" == *"Signature=adhoc"* || "$NODE_SIGNATURE" == *"TeamIde
 elif entitlement_is_true "$NODE_ENTITLEMENTS" "com.apple.security.cs.disable-library-validation"; then
   fail "team-signed Node must enforce library validation"
 fi
+if [[ "$PYTHON_SIGNATURE" == *"Signature=adhoc"* || "$PYTHON_SIGNATURE" == *"TeamIdentifier=not set"* ]]; then
+  if ! entitlement_is_true "$PYTHON_ENTITLEMENTS" "com.apple.security.cs.disable-library-validation"; then
+    fail "bundled Python cannot load signed Runtime Packs"
+  fi
+elif entitlement_is_true "$PYTHON_ENTITLEMENTS" "com.apple.security.cs.disable-library-validation"; then
+  fail "team-signed Python must enforce library validation"
+fi
 
 for relative in \
   "Contents/MacOS/yulu_app" \
@@ -312,7 +324,6 @@ if [[ "${YULU_SKIP_RUNTIME_EXECUTION:-0}" != "1" ]]; then
   python3 -c 'import json,sys; sys.exit(0 if json.loads(sys.argv[1]).get("nativeRecordingControls") is True else 1)' \
     "$NATIVE_CONTROLS" || fail "native recording controls are missing from the Application Runtime"
   NODE="$RUNTIME/bin/node"
-  PYTHON="$RUNTIME/python/bin/python3"
   FFMPEG="$RUNTIME/bin/ffmpeg"
   NODE_VERSION="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["node"])' "$VERSIONS")"
   PYTHON_VERSION="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["python"].split("+", 1)[0])' "$VERSIONS")"
