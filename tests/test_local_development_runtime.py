@@ -41,4 +41,6 @@ def test_development_app_owns_components_as_direct_children(tmp_path: Path) -> N
     assert "supervisor.start()" in startup
     assert "migrationCommitted = true" in startup
     assert 'hostEnvironment["YULU_SERVICE_OWNER"] = "com.yulu.app.host"' in source
+    assert 'hostEnvironment["YULU_PRODUCT_VERSION"] = Bundle.main.object(' in source
+    assert 'hostEnvironment["YULU_BUNDLE_VERSION"] = Bundle.main.object(' in source
     assert 'captureEnvironment["YULU_SERVICE_OWNER"] = "com.yulu.app.capture"' in source
