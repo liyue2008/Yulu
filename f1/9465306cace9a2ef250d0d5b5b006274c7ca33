@@ -1,0 +1,11 @@
+yulu/scripts/yulu_app.swift
+  ai_agent 64-76,2652-2657,3312,3334-3336,4468-4470,4525-4527,4566,4581-4583,4792-4806
+tests/test_local_development_runtime.py
+  ai_agent 1-44
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.4",
+  "base_commit_sha": "f19465306cace9a2ef250d0d5b5b006274c7ca33",
+  "prompts": {}
+}
