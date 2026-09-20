@@ -3304,6 +3304,12 @@ final class ProductSupervisor {
         hostEnvironment["YULU_UI_PORT"] = String(port)
         hostEnvironment["YULU_UI_DIST_WEB"] = layout.hostWeb.path
         hostEnvironment["YULU_HOST_NONCE"] = hostNonce
+        hostEnvironment["YULU_PRODUCT_VERSION"] = Bundle.main.object(
+            forInfoDictionaryKey: "YuluReleaseVersion"
+        ) as? String ?? ""
+        hostEnvironment["YULU_BUNDLE_VERSION"] = Bundle.main.object(
+            forInfoDictionaryKey: "CFBundleVersion"
+        ) as? String ?? ""
         hostEnvironment["YULU_SCRIPT_DIR"] = developmentScriptDir?.path
             ?? layout.bundledScriptDir.path
         hostEnvironment["YULU_NATIVE_HELPER_DIR"] = layout.executableDir.path
