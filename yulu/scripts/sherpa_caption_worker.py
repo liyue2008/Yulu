@@ -18,7 +18,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-
 SAMPLE_RATE = 16_000
 SOURCES = ("mic", "system")
 
@@ -27,6 +26,13 @@ def _result_text(recognizer: Any, stream: Any) -> str:
     result = recognizer.get_result(stream)
     value = result if isinstance(result, str) else getattr(result, "text", "")
     return str(value).strip()
+
+
+def _accept_waveform(stream: Any, samples: list[float]) -> None:
+    try:
+        stream.accept_waveform(SAMPLE_RATE, samples)
+    except Exception as exc:
+        raise RuntimeError("sherpa stream rejected waveform") from exc
 
 
 def _decode_pcm16(value: str) -> list[float]:
@@ -48,7 +54,7 @@ class SourceState:
 
 class CaptionWorker:
     def __init__(self, model_dir: Path, *, threads: int = 4) -> None:
-        import sherpa_onnx
+        import sherpa_onnx  # pyright: ignore[reportMissingImports]
 
         required = ("tokens.txt", "encoder.int8.onnx", "decoder.int8.onnx")
         missing = [name for name in required if not (model_dir / name).is_file()]
@@ -74,7 +80,10 @@ class CaptionWorker:
     def warm(self) -> dict[str, Any]:
         if not self.warmed:
             stream = self.recognizer.create_stream()
-            stream.accept_waveform(SAMPLE_RATE, [0.0] * int(SAMPLE_RATE * 0.8))
+            try:
+                _accept_waveform(stream, [0.0] * int(SAMPLE_RATE * 0.8))
+            except RuntimeError as exc:
+                raise RuntimeError("sherpa warmup failed") from exc
             stream.input_finished()
             while self.recognizer.is_ready(stream):
                 self.recognizer.decode_stream(stream)
@@ -119,7 +128,7 @@ class CaptionWorker:
             samples = _decode_pcm16(encoded)
             state = self.sources[source]
             state.samples += len(samples)
-            state.stream.accept_waveform(SAMPLE_RATE, samples)
+            _accept_waveform(state.stream, samples)
             updates[source] = self._decode(source)
         return {"updates": updates}
 
@@ -129,7 +138,10 @@ class CaptionWorker:
         updates: dict[str, Any] = {}
         for source in SOURCES:
             state = self.sources[source]
-            state.stream.accept_waveform(SAMPLE_RATE, [0.0] * int(SAMPLE_RATE * 0.8))
+            try:
+                _accept_waveform(state.stream, [0.0] * int(SAMPLE_RATE * 0.8))
+            except RuntimeError as exc:
+                raise RuntimeError("sherpa finalization failed") from exc
             state.stream.input_finished()
             update = self._decode(source)
             final_text = _result_text(self.recognizer, state.stream)
