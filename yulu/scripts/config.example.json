@@ -101,6 +101,7 @@
     "interval_sec": 10,
     "stable_sec": 15,
     "prompt_cooldown_sec": 1800,
+    "lark_cli_active_meeting": false,
     "window_keywords": [
       "Zoom Meeting", "Zoom 会议", "zoom.us", "Zoom Workplace",
       "腾讯会议", "Tencent Meeting", "VooV Meeting", "WeMeet",

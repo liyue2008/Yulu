@@ -1,6 +1,7 @@
 # pyright: reportMissingImports=false
 
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import meeting_detector
@@ -19,6 +20,53 @@ def test_meeting_detector_uses_running_meeting_app_when_titles_are_unavailable()
     assert result["active"] is True
     assert result["app"] == "Zoom Workplace"
     assert result["fallback"] == "running_process"
+
+
+def test_meeting_detector_uses_active_lark_cli_meeting_without_accessibility() -> None:
+    config = {
+        **meeting_detector.DEFAULT_CONFIG,
+        "lark_cli_active_meeting": True,
+    }
+    command = "/Users/test/.npm-global/bin/lark-cli"
+    payload = {
+        "ok": True,
+        "data": {
+            "meetings": [{
+                "meeting_id": "7687635521951452927",
+                "meeting_title": "Design review",
+            }],
+        },
+    }
+    with (
+        patch.object(meeting_detector, "_lark_cli_executable", return_value=command),
+        patch.object(
+            meeting_detector.subprocess,
+            "run",
+            return_value=SimpleNamespace(
+                returncode=0,
+                stdout=meeting_detector.json.dumps(payload),
+            ),
+        ) as run,
+    ):
+        result = meeting_detector.detect_meeting(config)
+
+    assert result == {
+        "active": True,
+        "title": "Design review",
+        "app": "Lark",
+        "window": "",
+        "signature": meeting_detector.signature("Lark", "7687635521951452927"),
+        "fallback": "lark_cli",
+    }
+    assert run.call_args.args[0] == [
+        command,
+        "vc",
+        "+meeting-list-active",
+        "--as",
+        "user",
+        "--format",
+        "json",
+    ]
 
 
 def test_meeting_detector_uses_lark_meeting_process_without_accessibility() -> None:
