@@ -6,6 +6,7 @@
   "pythonAbi": "cp313",
   "bundleName": "YuluLocalCaptionRuntime.bundle",
   "bundleIdentifier": "com.yulu.runtime.local-caption",
+  "teamIdentifier": "WMU9678ZQL",
   "assetUrlTemplate": "https://github.com/Nowhitestar/Yulu/releases/download/{tag}/yulu-local-caption-runtime-macos-arm64-{tag}.zip",
   "wheels": [
     {

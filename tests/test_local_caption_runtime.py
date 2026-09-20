@@ -1,3 +1,5 @@
+# pyright: reportMissingImports=false
+
 import hashlib
 import json
 import os
@@ -8,6 +10,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+
 import yulu.scripts.local_caption_runtime as runtime
 
 
@@ -164,6 +167,7 @@ def pack_definition() -> dict[str, object]:
         "pythonAbi": "cp313",
         "bundleName": "YuluLocalCaptionRuntime.bundle",
         "bundleIdentifier": "com.yulu.runtime.local-caption",
+        "teamIdentifier": "WMU9678ZQL",
         "assetUrlTemplate": "https://example.invalid/{tag}/runtime-pack.zip",
     }
 
@@ -244,6 +248,60 @@ def test_adhoc_pack_bypass_rejects_mixed_team_identities(
     )
 
     with pytest.raises(RuntimeError, match="Developer ID Team"):
+        runtime._verify_pack_code_signatures(pack, pack_definition())
+
+
+def test_development_smoke_accepts_official_pack_with_adhoc_python(
+    monkeypatch,
+    tmp_path,
+):
+    pack = tmp_path / "YuluLocalCaptionRuntime.bundle"
+    (pack / "Contents/Resources/site-packages").mkdir(parents=True)
+    python = Path(runtime.sys.executable).resolve()
+    monkeypatch.setenv("YULU_DEV_SMOKE", "1")
+    monkeypatch.setattr(
+        runtime,
+        "_codesign_metadata",
+        lambda path, **_kwargs: (
+            ("com.yulu.runtime.local-caption", "WMU9678ZQL")
+            if path == pack
+            else ("python", "not set")
+            if path == python
+            else ("native", "WMU9678ZQL")
+        ),
+    )
+    monkeypatch.setattr(
+        runtime.subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(returncode=0, stdout="", stderr=""),
+    )
+
+    runtime._verify_pack_code_signatures(pack, pack_definition())
+
+
+def test_development_smoke_rejects_non_yulu_pack_team(monkeypatch, tmp_path):
+    pack = tmp_path / "YuluLocalCaptionRuntime.bundle"
+    (pack / "Contents/Resources/site-packages").mkdir(parents=True)
+    python = Path(runtime.sys.executable).resolve()
+    monkeypatch.setenv("YULU_DEV_SMOKE", "1")
+    monkeypatch.setattr(
+        runtime,
+        "_codesign_metadata",
+        lambda path, **_kwargs: (
+            ("com.yulu.runtime.local-caption", "OTHERTEAM1")
+            if path == pack
+            else ("python", "not set")
+            if path == python
+            else ("native", "OTHERTEAM1")
+        ),
+    )
+    monkeypatch.setattr(
+        runtime.subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(returncode=0, stdout="", stderr=""),
+    )
+
+    with pytest.raises(RuntimeError, match="Application Runtime Team"):
         runtime._verify_pack_code_signatures(pack, pack_definition())
 
 

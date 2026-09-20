@@ -18,13 +18,13 @@ import urllib.request
 import zipfile
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 if __name__ == "__main__":
     # Isolated Python omits the script directory; trust only our bundled siblings.
     sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from application_paths import DURABLE_DATA_DIR, MODELS_DIR
-
 
 MODEL_NAME = "sherpa-onnx-streaming-paraformer-bilingual-zh-en"
 MODEL_URL = (
@@ -84,7 +84,10 @@ def _verify_model_hashes(model_dir: Path) -> bool:
 
 
 def _load_runtime_pack_definition() -> dict[str, Any]:
-    definition = json.loads(PACK_DEFINITION_PATH.read_text(encoding="utf-8"))
+    try:
+        definition = json.loads(PACK_DEFINITION_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError("local caption Runtime Pack definition is unavailable") from exc
     required = {
         "schema": 1,
         "id": "sherpa-onnx-1.13.2-cp313-macos-arm64",
@@ -93,6 +96,7 @@ def _load_runtime_pack_definition() -> dict[str, Any]:
         "pythonAbi": "cp313",
         "bundleName": "YuluLocalCaptionRuntime.bundle",
         "bundleIdentifier": "com.yulu.runtime.local-caption",
+        "teamIdentifier": "WMU9678ZQL",
     }
     for key, expected in required.items():
         if definition.get(key) != expected:
@@ -198,13 +202,20 @@ def _verify_pack_code_signatures(pack: Path, definition: dict[str, Any]) -> None
         raise RuntimeError("Runtime Pack bundle identifier is invalid")
     _, python_team = _codesign_metadata(Path(sys.executable).resolve())
     allow_adhoc = os.environ.get("YULU_ALLOW_ADHOC_RUNTIME_PACK") == "1"
+    development_smoke = os.environ.get("YULU_DEV_SMOKE") == "1"
+    expected_team = str(definition["teamIdentifier"])
     pack_has_team = bool(pack_team and pack_team != "not set")
     python_has_team = bool(python_team and python_team != "not set")
-    if not pack_has_team or not python_has_team:
-        if not allow_adhoc or pack_has_team or python_has_team:
+    if pack_has_team:
+        if pack_team != expected_team:
+            raise RuntimeError("Runtime Pack is not signed by the Application Runtime Team")
+        if python_has_team:
+            if python_team != pack_team:
+                raise RuntimeError("Runtime Pack is not signed by the Application Runtime Team")
+        elif not development_smoke:
             raise RuntimeError("Runtime Pack and bundled Python require the same Developer ID Team")
-    elif pack_team != python_team:
-        raise RuntimeError("Runtime Pack is not signed by the Application Runtime Team")
+    elif python_has_team or not allow_adhoc:
+        raise RuntimeError("Runtime Pack and bundled Python require the same Developer ID Team")
 
     site_packages = pack / "Contents" / "Resources" / "site-packages"
     for path in site_packages.rglob("*"):
@@ -353,6 +364,13 @@ def _safe_extract_runtime_pack(archive: Path, destination: Path, bundle_name: st
     return pack
 
 
+def _remove_tree(path: Path) -> None:
+    try:
+        shutil.rmtree(path, ignore_errors=True)
+    except OSError:
+        return
+
+
 def _install_runtime_pack(runtime_dir: Path, definition: dict[str, Any]) -> None:
     target = runtime_dir / str(definition["bundleName"])
     if _runtime_pack_ok(target, definition):
@@ -371,8 +389,38 @@ def _install_runtime_pack(runtime_dir: Path, definition: dict[str, Any]) -> None
         else:
             tag = _release_tag()
             url = str(definition["assetUrlTemplate"]).format(tag=tag)
+            parsed = urlsplit(url)
+            if (
+                parsed.scheme != "https"
+                or parsed.hostname != "github.com"
+                or parsed.username is not None
+                or parsed.password is not None
+                or parsed.query
+                or parsed.fragment
+                or not parsed.path.startswith("/Nowhitestar/Yulu/releases/download/")
+            ):
+                raise RuntimeError("Runtime Pack download URL is invalid")
             _emit("progress", phase="runtime", message=f"下载本地识别 Runtime Pack {tag}")
-            urllib.request.urlretrieve(url, archive)
+            downloaded = subprocess.run(
+                [
+                    "/usr/bin/curl",
+                    "--fail",
+                    "--location",
+                    "--silent",
+                    "--show-error",
+                    "--proto",
+                    "=https",
+                    "--proto-redir",
+                    "=https",
+                    "--output",
+                    str(archive),
+                    url,
+                ],
+                capture_output=True,
+                text=True,
+            )
+            if downloaded.returncode != 0:
+                raise RuntimeError("Runtime Pack download failed")
         staging = temporary_path / "staging"
         staging.mkdir()
         pack = _safe_extract_runtime_pack(archive, staging, str(definition["bundleName"]))
@@ -381,7 +429,7 @@ def _install_runtime_pack(runtime_dir: Path, definition: dict[str, Any]) -> None
 
         runtime_dir.mkdir(parents=True, exist_ok=True)
         backup = runtime_dir / f".{definition['bundleName']}.previous"
-        shutil.rmtree(backup, ignore_errors=True)
+        _remove_tree(backup)
         if target.exists():
             os.replace(target, backup)
         try:
@@ -389,11 +437,11 @@ def _install_runtime_pack(runtime_dir: Path, definition: dict[str, Any]) -> None
             _verify_pack_payload(target, definition)
             _verify_pack_code_signatures(target, definition)
         except Exception:
-            shutil.rmtree(target, ignore_errors=True)
+            _remove_tree(target)
             if backup.exists():
                 os.replace(backup, target)
             raise
-        shutil.rmtree(backup, ignore_errors=True)
+        _remove_tree(backup)
 
 
 def _copy_benchmark_model(model_dir: Path) -> bool:
@@ -421,10 +469,14 @@ def _download_model(model_dir: Path) -> None:
                 last_percent = percent
                 _emit("progress", phase="download", percent=percent, message=f"下载模型 {percent}%")
 
-        urllib.request.urlretrieve(MODEL_URL, archive, progress)
+        urllib.request.urlretrieve(  # noqa: S310 -- fixed HTTPS model URL
+            MODEL_URL,
+            archive,
+            progress,
+        )
         digest_state = hashlib.sha256()
-        with archive.open("rb") as source:
-            for chunk in iter(lambda: source.read(1024 * 1024), b""):
+        with archive.open("rb") as archive_source:
+            for chunk in iter(lambda: archive_source.read(1024 * 1024), b""):
                 digest_state.update(chunk)
         digest = digest_state.hexdigest()
         if digest != MODEL_SHA256:
@@ -438,15 +490,18 @@ def _download_model(model_dir: Path) -> None:
                 member = members.get(member_name)
                 if member is None or not member.isfile():
                     raise RuntimeError(f"模型包缺少 {member_name}")
-                source = bundle.extractfile(member)
-                if source is None:
+                member_source = bundle.extractfile(member)
+                if member_source is None:
                     raise RuntimeError(f"无法读取 {member_name}")
-                with source, (staging / name).open("wb") as target:
-                    shutil.copyfileobj(source, target)
+                with member_source, (staging / name).open("wb") as target:
+                    shutil.copyfileobj(member_source, target)
         if not _verify_model_hashes(staging):
             raise RuntimeError("解压后的 INT8 模型校验失败")
-        shutil.rmtree(model_dir, ignore_errors=True)
-        shutil.move(str(staging), str(model_dir))
+        _remove_tree(model_dir)
+        try:
+            shutil.move(str(staging), str(model_dir))
+        except OSError as exc:
+            raise RuntimeError("本地模型发布失败") from exc
 
 
 def install(config_dir: Path, *, models_dir: Path | None = None) -> dict[str, Any]:
@@ -475,8 +530,8 @@ def install(config_dir: Path, *, models_dir: Path | None = None) -> dict[str, An
 
 def uninstall(config_dir: Path, *, models_dir: Path | None = None) -> dict[str, Any]:
     paths = runtime_paths(config_dir, models_dir=models_dir)
-    shutil.rmtree(paths["runtime"], ignore_errors=True)
-    shutil.rmtree(paths["model"], ignore_errors=True)
+    _remove_tree(paths["runtime"])
+    _remove_tree(paths["model"])
     return status(config_dir, models_dir=models_dir)
 
 
