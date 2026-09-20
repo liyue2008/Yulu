@@ -3,12 +3,12 @@
 
 from __future__ import annotations
 
-import ctypes
 import argparse
+import ctypes
 import errno
 import fcntl
-import hashlib
 import grp
+import hashlib
 import json
 import os
 import plistlib
@@ -23,7 +23,7 @@ import subprocess
 import sys
 import time
 import uuid
-from contextlib import nullcontext
+from contextlib import nullcontext, suppress
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -543,6 +543,13 @@ def _bounded_sorted_directory_names(directory_fd: int) -> list[str]:
     return names
 
 
+def _frame_int(frame: dict[str, object], key: str) -> int:
+    value = frame.get(key)
+    if type(value) is not int:
+        raise MigrationBlocked("migration directory frame is invalid")
+    return value
+
+
 def _directory_identity_at(parent_fd: int, name: str) -> dict[str, object] | None:
     try:
         directory_fd = os.open(
@@ -583,10 +590,10 @@ def _directory_identity_at(parent_fd: int, name: str) -> dict[str, object] | Non
         try:
             while stack:
                 frame = stack[-1]
-                frame_fd = int(frame["fd"])
+                frame_fd = _frame_int(frame, "fd")
                 child_names = frame["names"]
                 assert isinstance(child_names, list)
-                index = int(frame["index"])
+                index = _frame_int(frame, "index")
                 if index >= len(child_names):
                     before = frame["before"]
                     assert isinstance(before, os.stat_result)
@@ -635,6 +642,9 @@ def _directory_identity_at(parent_fd: int, name: str) -> dict[str, object] | Non
                     raise MigrationBlocked(
                         f"unsafe migration directory entry: {child_path}"
                     )
+                child_fd = -1
+                child_depth = 0
+                opened_info: os.stat_result | None = None
                 if stat.S_ISREG(child_info.st_mode):
                     identity = _regular_file_identity_at(frame_fd, child_name)
                     if identity is None or (
@@ -646,7 +656,7 @@ def _directory_identity_at(parent_fd: int, name: str) -> dict[str, object] | Non
                         )
                     entry = {"path": child_path, "kind": "file", **identity}
                 elif stat.S_ISDIR(child_info.st_mode):
-                    child_depth = int(frame["depth"]) + 1
+                    child_depth = _frame_int(frame, "depth") + 1
                     if child_depth > _MAX_TRANSACTION_TREE_DEPTH:
                         raise MigrationBlocked(
                             "transaction directory is too deeply nested"
@@ -691,7 +701,7 @@ def _directory_identity_at(parent_fd: int, name: str) -> dict[str, object] | Non
                 ).encode()
                 serialized_bytes += len(encoded_entry)
                 if serialized_bytes > _MAX_TRANSACTION_TREE_SERIALIZED_BYTES:
-                    if stat.S_ISDIR(child_info.st_mode):
+                    if child_fd >= 0:
                         os.close(child_fd)
                     raise MigrationBlocked(
                         "transaction directory identity is too large"
@@ -699,6 +709,8 @@ def _directory_identity_at(parent_fd: int, name: str) -> dict[str, object] | Non
                 tree_digest.update(encoded_entry)
                 entry_count += 1
                 if stat.S_ISDIR(child_info.st_mode):
+                    if child_fd < 0 or opened_info is None:
+                        raise MigrationBlocked("migration directory frame is invalid")
                     try:
                         child_names_for_frame = _bounded_sorted_directory_names(
                             child_fd
@@ -718,10 +730,9 @@ def _directory_identity_at(parent_fd: int, name: str) -> dict[str, object] | Non
                     )
         finally:
             for frame in stack:
-                try:
-                    os.close(int(frame["fd"]))
-                except OSError:
-                    pass
+                frame_fd = _frame_int(frame, "fd")
+                with suppress(OSError):
+                    os.close(frame_fd)
         after = os.fstat(directory_fd)
         if (
             after.st_dev,
@@ -751,26 +762,42 @@ def _directory_identity_at(parent_fd: int, name: str) -> dict[str, object] | Non
 
 
 def _remove_owned_tree_at(directory_fd: int) -> None:
-    for name in os.listdir(directory_fd):
-        info = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+    try:
+        names = os.listdir(directory_fd)
+    except OSError as exc:
+        raise MigrationBlocked("transaction output tree is unavailable") from exc
+    for name in names:
+        try:
+            info = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+        except OSError as exc:
+            raise MigrationBlocked("transaction output entry is unavailable") from exc
         if info.st_uid != os.geteuid():
             raise MigrationBlocked("transaction output has unsafe ownership")
         if stat.S_ISREG(info.st_mode):
-            os.unlink(name, dir_fd=directory_fd)
+            try:
+                os.unlink(name, dir_fd=directory_fd)
+            except OSError as exc:
+                raise MigrationBlocked("transaction output file could not be removed") from exc
             continue
         if not stat.S_ISDIR(info.st_mode):
             raise MigrationBlocked("transaction output has an unsafe entry")
-        child_fd = os.open(
-            name,
-            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
-            dir_fd=directory_fd,
-        )
+        try:
+            child_fd = os.open(
+                name,
+                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                dir_fd=directory_fd,
+            )
+        except OSError as exc:
+            raise MigrationBlocked("transaction output directory is unavailable") from exc
         try:
             _remove_owned_tree_at(child_fd)
             os.fsync(child_fd)
         finally:
             os.close(child_fd)
-        os.rmdir(name, dir_fd=directory_fd)
+        try:
+            os.rmdir(name, dir_fd=directory_fd)
+        except OSError as exc:
+            raise MigrationBlocked("transaction output directory could not be removed") from exc
 
 
 def _present_kind(path: Path) -> str | None:
@@ -889,7 +916,7 @@ def _open_sqlite_source_entry(
     except FileNotFoundError:
         if not required:
             return None
-        raise MigrationBlocked("SQLite checkpoint source is unsafe")
+        raise MigrationBlocked("SQLite checkpoint source is unsafe") from None
     except OSError as exc:
         raise MigrationBlocked("SQLite checkpoint source is unsafe") from exc
     info = os.fstat(file_fd)
@@ -1202,6 +1229,13 @@ def checkpoint_sqlite_database(
         os.close(source_parent_fd)
 
 
+def _unlink_at_if_present(name: str, directory_fd: int) -> None:
+    try:
+        os.unlink(name, dir_fd=directory_fd)
+    except FileNotFoundError:
+        return
+
+
 def preflight_standard_outputs(
     legacy_root: Path,
     durable_root: Path,
@@ -1321,6 +1355,97 @@ def preflight_standard_outputs(
     return manifest
 
 
+def _retained_runtime_retry_transaction(
+    paths: MigrationPaths,
+    journal: dict[str, object],
+) -> str | None:
+    """Validate retained output evidence before reusing current runtime data."""
+    retained = journal.get("retainedRuntimeOutputs")
+    runtime_started = journal.get("runtimeInitializationStarted")
+    if type(runtime_started) is not bool or not runtime_started or retained is None:
+        return None
+    transaction_id = journal.get("transactionId")
+    if (
+        journal.get("phase") != "rolled_back"
+        or not isinstance(transaction_id, str)
+        or re.fullmatch(r"[0-9a-f]{32}", transaction_id) is None
+        or not isinstance(retained, dict)
+        or not retained
+        or any(
+            not isinstance(name, str)
+            or "/" in name
+            or name in {".", ".."}
+            or not isinstance(identity, dict)
+            for name, identity in retained.items()
+        )
+    ):
+        raise MigrationBlocked("retained runtime retry evidence is invalid")
+
+    standard_names = {
+        destination for _, destination in _ORDINARY_FILE_OUTPUTS
+    } | {
+        destination for _, destination in _DIRECTORY_OUTPUTS
+    } | {
+        name for name, _ in _SQLITE_OUTPUTS
+    }
+    expected_current = set(retained) & standard_names
+    current_presence = {
+        name: _present_kind(paths.durable_root / name) is not None
+        for name in expected_current
+    }
+    if not any(current_presence.values()):
+        return None
+    if not all(current_presence.values()):
+        raise MigrationBlocked("retained runtime data is incomplete")
+
+    recovery = (
+        paths.journal_dir / "retained-runtime-data" / transaction_id
+    )
+    recovery_fd = _open_existing_private_directory(recovery)
+    if recovery_fd < 0:
+        raise MigrationBlocked("retained runtime recovery is missing")
+    directory_names = {
+        destination for _, destination in _DIRECTORY_OUTPUTS
+    } | {"recording-events", "legacy-agent-queue"}
+    try:
+        try:
+            manifest = json.loads(
+                _read_private_file_at(recovery_fd, "manifest.json")
+            )
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise MigrationBlocked("retained runtime recovery changed") from exc
+        if (
+            not isinstance(manifest, dict)
+            or manifest.get("schemaVersion") != 1
+            or manifest.get("transactionId") != transaction_id
+            or manifest.get("outputs") != retained
+        ):
+            raise MigrationBlocked("retained runtime recovery changed")
+        for name, expected in retained.items():
+            observed = (
+                _directory_identity_at(recovery_fd, name)
+                if name in directory_names
+                else _regular_file_identity_at(recovery_fd, name)
+            )
+            if name.endswith(("-wal", "-shm")):
+                # SQLite may keep these transient sidecar inodes open briefly
+                # across rollback; validate their safe presence, while current
+                # database integrity below remains authoritative.
+                if observed is None:
+                    raise MigrationBlocked("retained runtime recovery changed")
+                continue
+            if observed != expected:
+                raise MigrationBlocked("retained runtime recovery changed")
+    finally:
+        os.close(recovery_fd)
+
+    # The restored legacy runtime may have continued writing the durable data.
+    # Validate its current shape and SQLite integrity without comparing it to
+    # the older read-only migration source.
+    preflight_standard_outputs(paths.durable_root, paths.durable_root)
+    return transaction_id
+
+
 def verify_final_commit_inputs(
     *,
     legacy_root: Path,
@@ -1340,12 +1465,14 @@ def verify_final_commit_inputs(
     except OSError as exc:
         raise MigrationBlocked("installed application evidence is unavailable") from exc
     executable = app_bundle / "Contents/MacOS/yulu_app"
+    installed = app_observation.get("installed")
     if (
         not stat.S_ISDIR(bundle_info.st_mode)
         or bundle_info.st_uid not in {0, os.geteuid()}
         or stat.S_IMODE(bundle_info.st_mode) & 0o022
         or actual_bundle != required_bundle
-        or app_observation.get("installed") is not True
+        or type(installed) is not bool
+        or not installed
         or app_observation.get("bundlePath") != str(actual_bundle)
         or app_observation.get("executablePath") != str(executable.resolve(strict=False))
     ):
@@ -1421,13 +1548,21 @@ def _validate_code_identity_observation(
         raise MigrationBlocked("code identity evidence is missing")
     expected_team = "adhoc" if allow_development_adhoc else _PRODUCT_TEAM_IDENTIFIER
     cd_hash = raw.get("cdHash")
+    accepted = raw.get("accepted")
+    static_valid = raw.get("staticSealValid")
+    dynamic_valid = raw.get("dynamicValid")
+    identities_match = raw.get("staticDynamicMatch")
     if (
-        raw.get("accepted") is not True
+        type(accepted) is not bool
+        or not accepted
         or raw.get("identifier") != expected_identifier
         or raw.get("teamIdentifier") != expected_team
-        or raw.get("staticSealValid") is not True
-        or raw.get("dynamicValid") is not True
-        or raw.get("staticDynamicMatch") is not True
+        or type(static_valid) is not bool
+        or not static_valid
+        or type(dynamic_valid) is not bool
+        or not dynamic_valid
+        or type(identities_match) is not bool
+        or not identities_match
         or not isinstance(cd_hash, str)
         or re.fullmatch(r"[0-9a-f]{40,128}", cd_hash) is None
     ):
@@ -1468,13 +1603,12 @@ def _launch_agents_identity(
         (entry.get("launchAgentsDevice"), entry.get("launchAgentsInode"))
         for entry in snapshot.values()
     }
-    if (
-        len(identities) != 1
-        or not all(type(value) is int for value in next(iter(identities)))
-    ):
+    if len(identities) != 1:
         raise MigrationBlocked("legacy LaunchAgents directory identity is invalid")
     device, inode = next(iter(identities))
-    return int(device), int(inode)
+    if type(device) is not int or type(inode) is not int:
+        raise MigrationBlocked("legacy LaunchAgents directory identity is invalid")
+    return device, inode
 
 
 def legacy_install_present(
@@ -1498,7 +1632,9 @@ def legacy_install_present(
     # Those historical keys alone do not represent a runnable legacy install.
     for label in LEGACY_JOB_LABELS:
         observed = launchctl(["print", f"gui/{uid}/{label}"])
-        returncode = int(getattr(observed, "returncode", 1))
+        returncode = getattr(observed, "returncode", 1)
+        if type(returncode) is not int:
+            return True
         if returncode == 0:
             return True
         if returncode != 113:
@@ -1527,7 +1663,11 @@ def _bundled_job_identity(output: str, app_bundle: Path, program: Path) -> tuple
     pid = field("pid")
     if managed != "com.apple.xpc.ServiceManagement" or executable not in {str(program), expected_relative}:
         return None
-    if not pid.isdecimal() or int(pid) <= 1:
+    try:
+        valid_pid = pid.isdecimal() and int(pid) > 1
+    except ValueError:
+        valid_pid = False
+    if not valid_pid:
         raise MigrationBlocked("application service has no running owner")
     return executable, pid, managed
 
@@ -1621,7 +1761,11 @@ def retire_previous_bundled_owners(
         for label, _, output in current:
             identity = _bundled_job_identity(output, app_bundle, expected[label][1])
             assert identity is not None
-            if not _bundled_owner_image_is_current(app_bundle, label, int(identity[1])):
+            try:
+                owner_pid = int(identity[1])
+            except ValueError as exc:
+                raise MigrationBlocked("application service has invalid owner") from exc
+            if not _bundled_owner_image_is_current(app_bundle, label, owner_pid):
                 needs_refresh = True
         if needs_refresh:
             # Treat Host and Capture as one installed version, even if only one
@@ -1683,6 +1827,11 @@ def run_migration_step(
         else nullcontext(authority)
     )
     with authority_scope as authority:
+        retained_retry_transaction = (
+            _retained_runtime_retry_transaction(paths, authority._journal)
+            if request_retry and isinstance(authority._journal, dict)
+            else None
+        )
         starting_transaction = authority._journal is None or request_retry
         if starting_transaction:
             if request_retry:
@@ -1694,7 +1843,8 @@ def run_migration_step(
                     raise MigrationBlocked(
                         "retry preflight cannot find the legacy install"
                     )
-                preflight_standard_outputs(legacy_root, paths.durable_root)
+                if retained_retry_transaction is None:
+                    preflight_standard_outputs(legacy_root, paths.durable_root)
                 launch_agents_fd = authority.launch_agents_fd(launch_agents_dir)
                 try:
                     retry_snapshot = snapshot_legacy_jobs(
@@ -1709,13 +1859,22 @@ def run_migration_step(
                     legacy_capture_socket,
                 )
                 authority.begin_retry(archive_dir=archive_dir)
+                if retained_retry_transaction is not None:
+                    authority.mark_retained_runtime_retry(
+                        retained_retry_transaction
+                    )
             else:
                 authority.begin()
             if app_bundle is not None:
                 authority.record_bundle_manifest(
                     _application_bundle_manifest(app_bundle)
                 )
-            preflight_standard_outputs(legacy_root, paths.durable_root)
+            preflight_standard_outputs(
+                paths.durable_root
+                if retained_retry_transaction is not None
+                else legacy_root,
+                paths.durable_root,
+            )
             launch_agents_fd = authority.launch_agents_fd(launch_agents_dir)
             try:
                 snapshot = snapshot_legacy_jobs(
@@ -1739,22 +1898,30 @@ def run_migration_step(
                     legacy_capture_socket,
                 ),
             )
-            from dictate import migrate_legacy_dictation_media
+            if retained_retry_transaction is None:
+                from dictate import migrate_legacy_dictation_media
 
-            migrate_legacy_dictation_media(
-                legacy_dir=legacy_root / "dictation",
-                media_dir=home_dir / "Movies" / "Yulu" / "Dictation",
-                manifest_path=paths.journal_dir / "dictation-media.json",
-            )
+                migrate_legacy_dictation_media(
+                    legacy_dir=legacy_root / "dictation",
+                    media_dir=home_dir / "Movies" / "Yulu" / "Dictation",
+                    manifest_path=paths.journal_dir / "dictation-media.json",
+                )
             authority.publish_standard_data(
                 legacy_root=legacy_root,
                 node_executable=node_executable,
                 server_js=server_js,
                 run=run_node,
+                reuse_existing=retained_retry_transaction is not None,
             )
             return authority.request_registration()
 
-        phase = str(authority._journal["phase"])
+        def current_journal() -> dict[str, object]:
+            journal = authority._journal
+            if not isinstance(journal, dict):
+                raise MigrationBlocked("application migration journal is missing")
+            return journal
+
+        phase = str(current_journal()["phase"])
         if event == "cancel" and phase in {
             "registration_requested",
             "awaiting_approval",
@@ -1775,7 +1942,7 @@ def run_migration_step(
                         statuses=statuses,
                     )
                     if action["action"] == "restore_legacy":
-                        job_snapshot = authority._journal.get("jobSnapshot")
+                        job_snapshot = current_journal().get("jobSnapshot")
                         if not isinstance(job_snapshot, dict):
                             raise MigrationBlocked("rollback job snapshot is missing")
                         authority.rollback_legacy_jobs(
@@ -1801,8 +1968,8 @@ def run_migration_step(
                     or app_bundle is None
                 ):
                     raise MigrationBlocked("invalid health observation")
-                data_manifest = authority._journal.get("dataManifest")
-                bundle_manifest = authority._journal.get("bundleManifest")
+                data_manifest = current_journal().get("dataManifest")
+                bundle_manifest = current_journal().get("bundleManifest")
                 if not isinstance(data_manifest, dict):
                     raise MigrationBlocked("published data manifest is unavailable")
                 if not isinstance(bundle_manifest, dict):
@@ -1839,7 +2006,7 @@ def run_migration_step(
             return authority.resume_pending_registration()
         if phase in {"registration_requested", "services_enabled", "verifying"}:
             return authority.request_rollback("crash_recovery")
-        if phase == "rollback_blocked" and "serviceNonce" in authority._journal:
+        if phase == "rollback_blocked" and "serviceNonce" in current_journal():
             # Re-observe removal through the bound Swift adapter before any
             # legacy restoration; a prior failed rollback is not that proof.
             return authority.request_rollback("rollback_recovery")
@@ -1873,7 +2040,7 @@ def run_migration_step(
             "rolling_back",
             "rollback_blocked",
         }:
-            job_snapshot = authority._journal.get("jobSnapshot")
+            job_snapshot = current_journal().get("jobSnapshot")
             if not isinstance(job_snapshot, dict):
                 raise MigrationBlocked("rollback job snapshot is missing")
             authority.rollback_legacy_jobs(
@@ -1886,7 +2053,7 @@ def run_migration_step(
         if phase == "committed":
             # Older migrations stopped `open -W`, not its LaunchServices-owned
             # App. Heal that precise orphan without replaying committed data.
-            snapshot = authority._journal.get("jobSnapshot")
+            snapshot = current_journal().get("jobSnapshot")
             if isinstance(snapshot, dict):
                 retire_legacy_status_agent(
                     authority.legacy_status_snapshot(snapshot),
@@ -2020,8 +2187,9 @@ def _mark_session_rollback_blocked(
                     "rollback_blocked",
                     intent={"action": "manual-remediation", "detail": detail},
                 )
-    except Exception:
-        pass
+    except Exception as marker_failure:
+        marker = type(marker_failure).__name__
+        detail = f"{detail}; rollback marker failed: {marker}"[:512]
     return {"action": "blocked", "detail": detail}
 
 
@@ -2107,7 +2275,7 @@ def run_migration_session(
     attempt_fd = -1
     attempt_locked = False
     session_authority: ApplicationMigration | None = None
-    if step is run_migration_step:
+    if step == run_migration_step:
         legacy_root = step_arguments.get("legacy_root")
         launch_agents_dir = step_arguments.get("launch_agents_dir")
         launchctl = step_arguments.get("launchctl", _run_launchctl)
@@ -2171,24 +2339,41 @@ def run_migration_session(
                 return 75
 
         app_bundle = step_arguments.get("app_bundle")
-        if step is run_migration_step and isinstance(app_bundle, Path):
+        if step == run_migration_step and isinstance(app_bundle, Path):
+            migration_legacy_root = step_arguments.get("legacy_root")
+            migration_launch_agents = step_arguments.get("launch_agents_dir")
+            migration_launchctl = step_arguments.get("launchctl", _run_launchctl)
+            if (
+                not isinstance(migration_legacy_root, Path)
+                or not isinstance(migration_launch_agents, Path)
+                or not callable(migration_launchctl)
+            ):
+                raise MigrationBlocked("migration session legacy inspection is incomplete")
             try:
                 retire_previous_bundled_owners(
-                    app_bundle, paths.cache_root / "audio_daemon.sock", launchctl=launchctl,
+                    app_bundle,
+                    paths.cache_root / "audio_daemon.sock",
+                    launchctl=migration_launchctl,
                 )
             except MigrationBlocked as failure:
-                action = "recording_active" if str(failure) == "legacy Capture recording is active" else "blocked"
-                output_stream.write((json.dumps({"action": action, "detail": str(failure)}) + "\n").encode())
+                response_action = {
+                    "legacy Capture recording is active": "recording_active",
+                }.get(str(failure), "blocked")
+                output_stream.write(
+                    (json.dumps({"action": response_action, "detail": str(failure)}) + "\n").encode()
+                )
                 output_stream.flush()
                 return 75
             if not _migration_journal_entry_present(paths.journal_path) and not legacy_install_present(
-                legacy_root=legacy_root, launch_agents_dir=launch_agents_dir, launchctl=launchctl,
+                legacy_root=migration_legacy_root,
+                launch_agents_dir=migration_launch_agents,
+                launchctl=migration_launchctl,
             ):
                 output_stream.write(b'{"action":"fresh_install"}\n')
                 output_stream.flush()
                 return 0
 
-        if step is run_migration_step or _migration_journal_entry_present(
+        if step == run_migration_step or _migration_journal_entry_present(
             paths.journal_path
         ):
             session_authority = ApplicationMigration(
@@ -2213,23 +2398,26 @@ def run_migration_session(
             if request_retry
             else step_arguments
         )
-        try:
-            action = step(paths=paths, **initial_step_arguments)
-        except Exception as failure:
+        def recover_initial_failure(failure: Exception) -> dict[str, object]:
             if (
                 retry_origin is not None
                 and session_authority is not None
                 and session_authority._journal == retry_origin
             ):
-                action = {"action": "blocked", "detail": str(failure)[:512]}
-            else:
-                action = _recover_live_session_failure(
-                    failure,
-                    paths=paths,
-                    step=step,
-                    service_adapter=service_adapter,
-                    step_arguments=step_arguments,
-                )
+                return {"action": "blocked", "detail": str(failure)[:512]}
+            return _recover_live_session_failure(
+                failure,
+                paths=paths,
+                step=step,
+                service_adapter=service_adapter,
+                step_arguments=step_arguments,
+            )
+
+        action: dict[str, object]
+        try:
+            action = step(paths=paths, **initial_step_arguments)
+        except Exception as failure:
+            action = recover_initial_failure(failure)
         while True:
             try:
                 output_stream.write(
@@ -2406,10 +2594,13 @@ def main(arguments: list[str] | None = None) -> int:
             step_arguments["request_retry"] = True
         service_adapter = None
         if options.app is not None:
-            service_adapter = lambda action: run_bundled_service_adapter(
-                action,
-                app_bundle=options.app,
-            )
+            def apply_service_action(action):
+                return run_bundled_service_adapter(
+                    action,
+                    app_bundle=options.app,
+                )
+
+            service_adapter = apply_service_action
         return run_migration_session(
             paths=paths,
             service_adapter=service_adapter,
@@ -2859,7 +3050,7 @@ def _publish_private_file_at(parent_fd: int, name: str, contents: bytes) -> bool
             linked_new = True
         except FileExistsError:
             if _read_private_file_at(parent_fd, name) != contents:
-                raise MigrationBlocked("private migration snapshot conflicts")
+                raise MigrationBlocked("private migration snapshot conflicts") from None
         os.unlink(temporary_name, dir_fd=parent_fd)
         os.fsync(parent_fd)
         if _read_private_file_at(parent_fd, name) != contents:
@@ -2869,15 +3060,9 @@ def _publish_private_file_at(parent_fd: int, name: str, contents: bytes) -> bool
     finally:
         if temporary_fd >= 0:
             os.close(temporary_fd)
-        try:
-            os.unlink(temporary_name, dir_fd=parent_fd)
-        except FileNotFoundError:
-            pass
+        _unlink_at_if_present(temporary_name, parent_fd)
         if linked_new and not publication_verified:
-            try:
-                os.unlink(name, dir_fd=parent_fd)
-            except FileNotFoundError:
-                pass
+            _unlink_at_if_present(name, parent_fd)
             os.fsync(parent_fd)
 
 
@@ -2985,9 +3170,12 @@ def _publish_private_output_at(
             _MAX_LEGACY_QUEUE_OUTPUT_BYTES,
         )
         if existing != expected:
-            raise MigrationBlocked("Host queue migration output conflicts")
-    os.unlink(temporary_name, dir_fd=parent_fd)
-    os.fsync(parent_fd)
+            raise MigrationBlocked("Host queue migration output conflicts") from None
+    try:
+        os.unlink(temporary_name, dir_fd=parent_fd)
+        os.fsync(parent_fd)
+    except OSError as exc:
+        raise MigrationBlocked("Host queue migration output publication failed") from exc
 
 
 def _atomic_write_json_at(
@@ -3016,10 +3204,7 @@ def _atomic_write_json_at(
     finally:
         if temporary_fd >= 0:
             os.close(temporary_fd)
-        try:
-            os.unlink(temporary_name, dir_fd=parent_fd)
-        except FileNotFoundError:
-            pass
+        _unlink_at_if_present(temporary_name, parent_fd)
 
 
 def _atomic_write_json(path: Path, payload: dict[str, object]) -> None:
@@ -3099,7 +3284,7 @@ class ApplicationMigration:
         self._archive_dir_fd = -1
         self._journal: dict[str, object] | None = None
 
-    def __enter__(self) -> "ApplicationMigration":
+    def __enter__(self) -> ApplicationMigration:
         _ensure_private_directory(self.paths.lock_dir)
         if self._provided_attempt_fd is None:
             self._attempt_fd = os.open(
@@ -3137,7 +3322,12 @@ class ApplicationMigration:
         self._journal = _read_journal_at(self._journal_dir_fd, self.paths.journal_path.name)
         return self
 
-    def __exit__(self, *_: object) -> None:
+    def __exit__(
+        self,
+        _exc_type: object,
+        _exc_value: object,
+        _traceback: object,
+    ) -> None:
         self.close()
 
     def close(self) -> None:
@@ -3267,6 +3457,8 @@ class ApplicationMigration:
             "transactionOutputIdentities": {},
         }
         preflight_only = previous.get("retryPreflightOnly")
+        preflight_only_is_true = type(preflight_only) is bool and preflight_only
+        previous_retry_of = previous.get("retryOf")
         if (
             previous.get("intent") == {"action": "crash-recovery-no-mutation"}
             and "jobSnapshot" not in previous
@@ -3282,10 +3474,10 @@ class ApplicationMigration:
             if previous_attempt == 1:
                 required_fields -= retry_fields
             elif (
-                preflight_only is not True
+                not preflight_only_is_true
                 or previous.get("transactionOutputIdentities") != {}
-                or not isinstance(previous.get("retryOf"), str)
-                or re.fullmatch(r"[0-9a-f]{32}", previous["retryOf"]) is None
+                or not isinstance(previous_retry_of, str)
+                or re.fullmatch(r"[0-9a-f]{32}", previous_retry_of) is None
             ):
                 raise MigrationBlocked("retry preflight transaction lineage is invalid")
             allowed_fields = required_fields | {"updatedAt", "bundleManifest"}
@@ -3297,7 +3489,7 @@ class ApplicationMigration:
             self._journal = retry_journal
             self._write_journal()
             return dict(self._journal)
-        if preflight_only is True:
+        if preflight_only_is_true:
             if (
                 previous.get("intent")
                 != {"action": "crash-recovery-no-mutation"}
@@ -3373,6 +3565,19 @@ class ApplicationMigration:
         self._write_journal()
         return dict(self._journal)
 
+    def mark_retained_runtime_retry(self, transaction_id: str) -> None:
+        if (
+            self._journal is None
+            or self._journal.get("phase") != "preflight"
+            or re.fullmatch(r"[0-9a-f]{32}", transaction_id) is None
+        ):
+            raise MigrationBlocked("retained runtime retry marker is invalid")
+        self._journal = {
+            **self._journal,
+            "retainedRuntimeRetryOf": transaction_id,
+        }
+        self._write_journal()
+
     def record_bundle_manifest(self, manifest: dict[str, str]) -> None:
         if self._journal is None or self._journal.get("phase") != "preflight":
             raise MigrationBlocked("application bundle manifest is out of phase")
@@ -3399,8 +3604,14 @@ class ApplicationMigration:
         # caller-supplied exception text. Retain the original cause of rollback.
         if code not in _MIGRATION_FAILURE_DETAILS:
             raise MigrationBlocked("unknown migration failure code")
+        runtime_started = (
+            self._journal.get("runtimeInitializationStarted")
+            if self._journal is not None
+            else None
+        )
         if self._journal is None or not (
-            "serviceNonce" in self._journal or self._journal.get("runtimeInitializationStarted") is True
+            "serviceNonce" in self._journal
+            or (type(runtime_started) is bool and runtime_started)
         ):
             return
         if self._journal.get("phase") in {"committed", "rolled_back"}:
@@ -3545,15 +3756,21 @@ class ApplicationMigration:
         self.transition("verifying", intent={"action": "verify-runtime-owners"})
         host_pid = host.get("ownerPID")
         capture_pid = capture.get("ownerPID")
+        host_running = host.get("running")
+        capture_running = capture.get("running")
+        socket_owned = capture.get("socketOwned")
         healthy = (
-            host.get("running") is True
+            type(host_running) is bool
+            and host_running
             and type(host_pid) is int
             and host_pid > 1
             and host.get("port") == 7777
-            and capture.get("running") is True
+            and type(capture_running) is bool
+            and capture_running
             and type(capture_pid) is int
             and capture_pid > 1
-            and capture.get("socketOwned") is True
+            and type(socket_owned) is bool
+            and socket_owned
             and host_pid != capture_pid
         )
         if not healthy:
@@ -3721,19 +3938,15 @@ class ApplicationMigration:
                     completed = True
             if transaction_fd >= 0 and not completed:
                 for name in created_links:
-                    try:
+                    with suppress(FileNotFoundError):
                         os.unlink(name, dir_fd=transaction_fd)
-                    except FileNotFoundError:
-                        pass
                 os.fsync(transaction_fd)
                 remove_empty_transaction_directory = not os.listdir(transaction_fd)
             if transaction_fd >= 0:
                 os.close(transaction_fd)
             if remove_empty_transaction_directory:
-                try:
+                with suppress(FileNotFoundError):
                     os.rmdir(transaction_id, dir_fd=snapshots_fd)
-                except FileNotFoundError:
-                    pass
                 os.fsync(snapshots_fd)
             os.close(snapshots_fd)
         return sanitized
@@ -3746,7 +3959,8 @@ class ApplicationMigration:
         if entry is None:
             return {}
         contents = self._snapshot_plist_bytes(label, entry)
-        if contents is None and entry.get("loaded") is True:
+        loaded = entry.get("loaded")
+        if contents is None and type(loaded) is bool and loaded:
             raise MigrationBlocked("loaded legacy StatusAgent has no executable snapshot")
         return {label: {**entry, "plistBytes": contents.hex() if contents is not None else None}}
 
@@ -3848,8 +4062,10 @@ class ApplicationMigration:
         node_executable: Path,
         server_js: Path,
         run: Callable[..., object] | None = None,
+        reuse_existing: bool = False,
     ) -> None:
-        queue_fd = _open_legacy_agent_queue(legacy_root)
+        source_root = self.paths.durable_root if reuse_existing else legacy_root
+        queue_fd = None if reuse_existing else _open_legacy_agent_queue(legacy_root)
         queue_archive_dir_fd = -1
         queue_archive_fd = -1
         queue_audit_fd = -1
@@ -3859,7 +4075,7 @@ class ApplicationMigration:
         queue_audit_name = ""
         queue_raw: bytes | None = None
         try:
-            preflight = preflight_standard_outputs(legacy_root, self.paths.durable_root)
+            preflight = preflight_standard_outputs(source_root, self.paths.durable_root)
         except Exception:
             if queue_fd is not None:
                 os.close(queue_fd)
@@ -3939,10 +4155,18 @@ class ApplicationMigration:
             environment["YULU_LEGACY_AGENT_QUEUE_AUDIT_NAME"] = queue_audit_name
             assert self._journal is not None
             environment["YULU_MIGRATION_TIMESTAMP"] = str(self._journal["createdAt"])
+        def reuse_current_runtime(arguments, **_options):
+            return subprocess.CompletedProcess(arguments, 0, "", "")
+
+        preparation_runner = (
+            reuse_current_runtime
+            if reuse_existing
+            else (run or _run_node_leaf_bounded)
+        )
         leaf_completed = False
         try:
             try:
-                result = (run or _run_node_leaf_bounded)(
+                result = preparation_runner(
                     [str(node_executable), str(server_js), "--prepare-application-data"],
                     cwd=server_js.parent,
                     env=environment,
@@ -3973,10 +4197,7 @@ class ApplicationMigration:
                     queue_audit_temporary,
                 ):
                     if temporary_name:
-                        try:
-                            os.unlink(temporary_name, dir_fd=queue_archive_dir_fd)
-                        except FileNotFoundError:
-                            pass
+                        _unlink_at_if_present(temporary_name, queue_archive_dir_fd)
                 os.fsync(queue_archive_dir_fd)
                 os.close(queue_archive_dir_fd)
                 queue_archive_dir_fd = -1
@@ -3987,10 +4208,7 @@ class ApplicationMigration:
                     queue_audit_temporary,
                 ):
                     if temporary_name:
-                        try:
-                            os.unlink(temporary_name, dir_fd=queue_archive_dir_fd)
-                        except FileNotFoundError:
-                            pass
+                        _unlink_at_if_present(temporary_name, queue_archive_dir_fd)
                 os.fsync(queue_archive_dir_fd)
                 os.close(queue_archive_dir_fd)
                 queue_archive_dir_fd = -1
@@ -4049,15 +4267,12 @@ class ApplicationMigration:
                     queue_audit_temporary,
                 ):
                     if temporary_name:
-                        try:
-                            os.unlink(temporary_name, dir_fd=queue_archive_dir_fd)
-                        except FileNotFoundError:
-                            pass
+                        _unlink_at_if_present(temporary_name, queue_archive_dir_fd)
                 os.fsync(queue_archive_dir_fd)
                 os.close(queue_archive_dir_fd)
                 queue_archive_dir_fd = -1
 
-        published = preflight_standard_outputs(legacy_root, self.paths.durable_root)
+        published = preflight_standard_outputs(source_root, self.paths.durable_root)
         for name, entry in published.items():
             before = preflight[name]
             if any(
@@ -4160,8 +4375,10 @@ class ApplicationMigration:
     def retain_started_transaction_outputs(self) -> None:
         """Recover a started attempt without discarding its legitimate writes."""
         assert self._journal is not None
+        runtime_started = self._journal.get("runtimeInitializationStarted")
         if self._journal.get("phase") != "rolling_back" or not (
-            "serviceNonce" in self._journal or self._journal.get("runtimeInitializationStarted") is True
+            "serviceNonce" in self._journal
+            or (type(runtime_started) is bool and runtime_started)
         ):
             raise MigrationBlocked("runtime data retention is out of phase")
         preflight = self._journal.get("preflightDataManifest")
@@ -4218,10 +4435,16 @@ class ApplicationMigration:
             else:
                 # Compatibility with an older, already failed journal: retain
                 # only known runtime entries created after that attempt began.
-                info = os.stat(name, dir_fd=self._durable_root_fd, follow_symlinks=False)
                 try:
-                    created_at = datetime.fromisoformat(str(self._journal["createdAt"])).timestamp()
-                except (KeyError, ValueError) as exc:
+                    info = os.stat(
+                        name,
+                        dir_fd=self._durable_root_fd,
+                        follow_symlinks=False,
+                    )
+                    created_at = datetime.fromisoformat(
+                        str(self._journal["createdAt"])
+                    ).timestamp()
+                except (KeyError, OSError, ValueError) as exc:
                     raise MigrationBlocked("runtime entry baseline is invalid") from exc
                 belongs_to_attempt = getattr(info, "st_birthtime", info.st_ctime) >= created_at
             if belongs_to_attempt:
@@ -4583,8 +4806,10 @@ class ApplicationMigration:
             _wait_for_legacy_job_state(
                 label, loaded=bool(snapshot[label]["loaded"]), launchctl=launchctl
             )
+        runtime_started = self._journal.get("runtimeInitializationStarted")
         if "preflightDataManifest" in self._journal and (
-            "serviceNonce" in self._journal or self._journal.get("runtimeInitializationStarted") is True
+            "serviceNonce" in self._journal
+            or (type(runtime_started) is bool and runtime_started)
         ):
             # A launched Host legitimately replaces config.json and writes WAL
             # and database pages. Never delete these using pre-start digests.
@@ -4623,7 +4848,7 @@ def _peer_identity(client: socket.socket) -> tuple[int, int]:
     libc = ctypes.CDLL(None, use_errno=True)
     if libc.getpeereid(client.fileno(), ctypes.byref(peer_uid), ctypes.byref(peer_gid)) != 0:
         raise OSError(ctypes.get_errno(), "getpeereid failed")
-    return peer_pid, int(peer_uid.value)
+    return peer_pid, peer_uid.value
 
 
 def _process_executable(pid: int) -> Path:
@@ -4647,7 +4872,7 @@ def _process_generation(pid: int) -> tuple[int, int]:
     )
     if count != ctypes.sizeof(info):
         raise OSError(ctypes.get_errno(), "proc_pidinfo failed")
-    return int(info.pbi_start_tvsec), int(info.pbi_start_tvusec)
+    return info.pbi_start_tvsec, info.pbi_start_tvusec
 
 
 def _read_status_payload(client: socket.socket) -> dict[str, object]:
@@ -4661,7 +4886,10 @@ def _read_status_payload(client: socket.socket) -> dict[str, object]:
         response.extend(chunk)
     if not response or len(response) > _MAX_STATUS_BYTES:
         raise OSError("legacy Capture status response is missing or too large")
-    payload = json.loads(response)
+    try:
+        payload = json.loads(response)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise OSError("legacy service returned invalid JSON") from exc
     if not isinstance(payload, dict):
         raise OSError("legacy service returned an invalid status response")
     return payload
@@ -4679,6 +4907,8 @@ def _legacy_status_executable(snapshot: dict[str, dict[str, object]]) -> Path | 
     raw = entry.get("plistBytes")
     if raw is None:
         return None
+    if not isinstance(raw, str):
+        raise MigrationBlocked("legacy StatusAgent executable snapshot is invalid")
     try:
         payload = plistlib.loads(bytes.fromhex(raw))
         if not isinstance(payload, dict):
@@ -4743,7 +4973,8 @@ def inspect_legacy_status_agent(
     pids = _legacy_status_pids(executable)
     if not pids:
         return None
-    if len(pids) != 1 or snapshot["com.yulu.statusagent"].get("loaded") is not True:
+    loaded = snapshot["com.yulu.statusagent"].get("loaded")
+    if len(pids) != 1 or type(loaded) is not bool or not loaded:
         raise MigrationBlocked("legacy StatusAgent is running outside its recorded job")
     pid = pids[0]
     client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -4757,11 +4988,17 @@ def inspect_legacy_status_agent(
         status = _read_status_payload(client)
         if _process_generation(pid) != generation:
             raise MigrationBlocked("legacy StatusAgent identity changed during status check")
+        ok = status.get("ok")
+        dictation_active = status.get("dictation_active")
+        voice_chat_visible = status.get("voice_chat_window_visible")
         if (
-            status.get("ok") is not True
+            type(ok) is not bool
+            or not ok
             or status.get("state") not in ({"idle", "daemonDown"} if capture_retired else {"idle"})
-            or status.get("dictation_active") is not False
-            or status.get("voice_chat_window_visible") is not False
+            or type(dictation_active) is not bool
+            or dictation_active
+            or type(voice_chat_visible) is not bool
+            or voice_chat_visible
             or status.get("launcher_pid") is not None
             or status.get("launcher_pids", []) != []
         ):

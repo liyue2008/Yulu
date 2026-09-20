@@ -28,11 +28,13 @@ import signal
 import subprocess
 import sys
 import uuid
+from contextlib import suppress
 from datetime import datetime, timedelta
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+import meeting_actions
 from application_paths import (
     CONFIG_PATH,
     CONFIG_READ_PATHS,
@@ -41,19 +43,12 @@ from application_paths import (
     LEGACY_READ_ONLY_DATA_DIR,
     LOGS_DIR,
 )
-import meeting_actions
-from state_store import (
-    load_state as load_recording_state,
-    recording_info,
-    save_state as save_recording_state,
-    set_recording_started,
-    set_recording_stopped,
-)
-from recording_lock import (
-    acquire as acquire_recording_lock,
-    record as record_lock,
-    RecordingBusy,
-)
+from recording_lock import RecordingBusy
+from recording_lock import acquire as acquire_recording_lock
+from recording_lock import record as record_lock
+from state_store import load_state as load_recording_state
+from state_store import recording_info, set_recording_started, set_recording_stopped
+from state_store import save_state as save_recording_state
 
 CONFIG_DIR = DURABLE_DATA_DIR
 SCHEDULE_PATH = CONFIG_DIR / "schedule.json"
@@ -84,8 +79,12 @@ def load_config():
     if path is None:
         print(f"Config not found at {CONFIG_PATH}", file=sys.stderr)
         sys.exit(1)
-    with open(path) as f:
-        return json.load(f)
+    try:
+        with path.open(encoding="utf-8") as handle:
+            return json.load(handle)
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"Config cannot be read: {type(exc).__name__}", file=sys.stderr)
+        raise SystemExit(1) from exc
 
 
 def _transcription_language(path: Path | None = None) -> str:
@@ -125,7 +124,11 @@ def _agent_pipeline_auto_processing(path: Path | None = None) -> bool:
     pipeline = config.get("agent_pipeline")
     if not isinstance(pipeline, dict):
         return True
-    return pipeline.get("enabled", True) is not False and pipeline.get("auto_process_recordings", True) is not False
+    enabled = pipeline.get("enabled", True)
+    auto_process = pipeline.get("auto_process_recordings", True)
+    explicitly_disabled = type(enabled) is bool and not enabled
+    auto_process_disabled = type(auto_process) is bool and not auto_process
+    return not explicitly_disabled and not auto_process_disabled
 
 
 def _recording_completed_payload(audio_path: str, title: str, language: str | None = None) -> dict:
@@ -150,6 +153,23 @@ def _read_mcp_token(path: Path | None = None) -> str:
     return token.strip() if isinstance(token, str) else ""
 
 
+def _http_recording_error_result(exc: HTTPError) -> str:
+    try:
+        body = json.loads(exc.read().decode("utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        body = {}
+    permanent = body.get("permanent") if isinstance(body, dict) else None
+    if (
+        exc.code == 409
+        and isinstance(body, dict)
+        and body.get("error") == "recording_pipeline_policy_disabled"
+        and type(permanent) is bool
+        and permanent
+    ):
+        return "policy_disabled"
+    return "transient"
+
+
 def _post_recording_completed(payload: dict, *, timeout: float = 5.0) -> str:
     token = _read_mcp_token()
     if not token:
@@ -166,23 +186,12 @@ def _post_recording_completed(payload: dict, *, timeout: float = 5.0) -> str:
         method="POST",
     )
     try:
-        with urlopen(request, timeout=timeout) as response:
+        with urlopen(request, timeout=timeout) as response:  # noqa: S310 -- fixed loopback URL
             response.read()
             status = getattr(response, "status", response.getcode())
             return "accepted" if 200 <= int(status) < 300 else "transient"
     except HTTPError as exc:
-        try:
-            body = json.loads(exc.read().decode("utf-8"))
-        except Exception:
-            body = {}
-        if (
-            exc.code == 409
-            and isinstance(body, dict)
-            and body.get("error") == "recording_pipeline_policy_disabled"
-            and body.get("permanent") is True
-        ):
-            return "policy_disabled"
-        return "transient"
+        return _http_recording_error_result(exc)
     except (URLError, OSError, TimeoutError, ValueError):
         return "transient"
 
@@ -203,7 +212,7 @@ def _post_realtime(action: str, payload: dict, *, timeout: float = 30.0) -> bool
         method="POST",
     )
     try:
-        with urlopen(request, timeout=timeout) as response:
+        with urlopen(request, timeout=timeout) as response:  # noqa: S310 -- fixed loopback URL
             response.read()
             status = getattr(response, "status", response.getcode())
             return 200 <= int(status) < 300
@@ -255,8 +264,12 @@ def load_schedule():
             path = legacy
     if not path.exists():
         return {"events": [], "meetings": []}
-    with open(path) as f:
-        data = json.load(f)
+    try:
+        with path.open(encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"⚠️ schedule.json 读取失败: {type(exc).__name__}", file=sys.stderr)
+        return {"events": [], "meetings": []}
     data.setdefault("events", [])
     data.setdefault("meetings", [])
     return data
@@ -270,7 +283,9 @@ def _prune_past_events(data, grace_sec=15):
     for ev in data.get("events", []):
         try:
             at_ts = parse_iso(ev["at"]).timestamp()
-        except Exception:
+        except (KeyError, TypeError, ValueError):
+            at_ts = None
+        if at_ts is None:
             continue
         if at_ts + grace_sec >= now_ts:
             kept_events.append(ev)
@@ -282,7 +297,9 @@ def _prune_past_events(data, grace_sec=15):
             start = parse_iso(meeting["start"])
             duration = int(meeting.get("duration_min", DEFAULT_DURATION_MIN))
             end_ts = (start + timedelta(minutes=duration)).timestamp()
-        except Exception:
+        except (KeyError, TypeError, ValueError):
+            end_ts = None
+        if end_ts is None:
             continue
         if end_ts + grace_sec >= now_ts:
             kept_meetings.append(meeting)
@@ -293,8 +310,11 @@ def _prune_past_events(data, grace_sec=15):
 def save_schedule(data):
     SCHEDULE_PATH.parent.mkdir(parents=True, exist_ok=True)
     data = _prune_past_events(data)
-    with open(SCHEDULE_PATH, "w") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False, default=str)
+    try:
+        with SCHEDULE_PATH.open("w", encoding="utf-8") as handle:
+            json.dump(data, handle, indent=2, ensure_ascii=False, default=str)
+    except OSError as exc:
+        raise RuntimeError("schedule.json 写入失败") from exc
     notify_scheduler()
 
 
@@ -407,7 +427,11 @@ def cmd_add(args):
         sys.exit(1)
     title = args[0]
     start_iso = args[1]
-    duration = int(args[2]) if len(args) > 2 else DEFAULT_DURATION_MIN
+    try:
+        duration = int(args[2]) if len(args) > 2 else DEFAULT_DURATION_MIN
+    except ValueError as exc:
+        print(f"duration_min 解析失败: {exc}", file=sys.stderr)
+        raise SystemExit(1) from exc
 
     try:
         start = parse_iso(start_iso)
@@ -683,7 +707,10 @@ def _meeting_duration(meeting_id):
     data = load_schedule()
     for m in data.get("meetings", []):
         if m.get("id") == meeting_id:
-            return int(m.get("duration_min", DEFAULT_DURATION_MIN))
+            try:
+                return int(m.get("duration_min", DEFAULT_DURATION_MIN))
+            except (TypeError, ValueError):
+                return DEFAULT_DURATION_MIN
     return DEFAULT_DURATION_MIN
 
 
@@ -792,8 +819,10 @@ def _active_recording_info():
         resp = _capture_controller().status()
     except Exception:
         resp = None
-    if not (resp and resp.get("recording") is True):
+    recording = resp.get("recording") if isinstance(resp, dict) else None
+    if type(recording) is not bool or not recording:
         return {}
+    assert isinstance(resp, dict)
     audio_path = resp.get("file") or ""
     title = Path(audio_path).stem if audio_path else "meeting"
     return {
@@ -897,12 +926,10 @@ def _stop_and_process(stop_reason="manual"):
     notify = SCRIPT_DIR / "notify.py"
     # Submit the saved notice before Host dispatch so a fast summary cannot be
     # overwritten by a late "saved" event. Delivery never gates durable work.
-    try:
+    with suppress(OSError, subprocess.TimeoutExpired):
         subprocess.run([sys.executable, str(notify), "notify_stop", title, stop_reason,
                         resolved_audio_path.stem], timeout=5,
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    except (OSError, subprocess.TimeoutExpired):
-        pass
 
     # 2. Host 接管后续 Agent 工作流。Host 不可用时持久化事件，绝不回退到
     # 已退役的 Yulu-owned 转录、摘要或 connector 执行器。
@@ -915,8 +942,8 @@ def _stop_and_process(stop_reason="manual"):
     try:
         data = load_schedule()
         save_schedule(data)
-    except Exception:
-        pass
+    except Exception as exc:
+        print(f"⚠️ 录音提醒清理失败: {type(exc).__name__}", file=sys.stderr)
 
     print(f"✅ 录音已保存: {audio_path}")
     return True
