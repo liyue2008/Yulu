@@ -59,12 +59,12 @@ struct MeetingPrompt {
     let primaryAction: String
     let stopping: Bool
 
-    var heading: String { stopping ? L("会议结束了吗？", "Has the meeting ended?") : L("开始录音？", "Start recording?") }
+    var heading: String { stopping ? L("录音仍在进行", "Recording is still running") : L("开始录音？", "Start recording?") }
     var detail: String {
         let clean = title.components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }.joined(separator: " ")
         let subject = clean.isEmpty ? L("未命名会议", "Untitled meeting") : String(clean.prefix(240)) + (clean.count > 240 ? "…" : "")
         return stopping
-            ? subject + "\n" + L("已到预计结束时间，录音仍在继续。", "The scheduled end time has passed. Recording is still running.")
+            ? subject + "\n" + L("为避免忘记关闭录音，请确认是否继续。", "To avoid an unintended long recording, confirm whether to continue.")
             : subject
     }
     var defaultTitle: String { stopping ? L("继续录音", "Keep recording") : L("开始录音", "Start recording") }

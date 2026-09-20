@@ -7,6 +7,7 @@ import argparse
 import json
 import os
 import plistlib
+import pwd
 import re
 import stat
 import subprocess
@@ -137,7 +138,23 @@ def _valid_update_health(
     health: dict[str, object],
     *,
     expected: dict[str, object],
+    application_path: Path = Path("/Applications/Yulu.app"),
 ) -> bool:
+    requested_path = application_path.resolve(strict=False)
+    user_path = (
+        Path(pwd.getpwuid(os.geteuid()).pw_dir) / "Applications/Yulu.app"
+    ).resolve(strict=False)
+    if requested_path == user_path:
+        application_executable = str(requested_path / "Contents/MacOS/yulu_app")
+        host_executable = str(requested_path / "Contents/Resources/runtime/bin/node")
+        capture_executable = str(
+            requested_path
+            / "Contents/Helpers/YuluCapture.app/Contents/MacOS/audio_daemon"
+        )
+    else:
+        application_executable = _APPLICATION_EXECUTABLE
+        host_executable = _HOST_EXECUTABLE
+        capture_executable = _CAPTURE_EXECUTABLE
     application = health.get("application")
     host = health.get("host")
     capture = health.get("capture")
@@ -149,7 +166,7 @@ def _valid_update_health(
             version_key="version",
             version=expected.get("version"),
             build=expected.get("build"),
-            executable=_APPLICATION_EXECUTABLE,
+            executable=application_executable,
         )
         and _valid_runtime_identity(
             host,
@@ -157,7 +174,7 @@ def _valid_update_health(
             version_key="productVersion",
             version=expected.get("version"),
             build=expected.get("build"),
-            executable=_HOST_EXECUTABLE,
+            executable=host_executable,
         )
         and _valid_runtime_identity(
             capture,
@@ -165,7 +182,7 @@ def _valid_update_health(
             version_key="productVersion",
             version=expected.get("version"),
             build=expected.get("build"),
-            executable=_CAPTURE_EXECUTABLE,
+            executable=capture_executable,
         )
         and isinstance(application, dict)
         and isinstance(host, dict)
@@ -1127,6 +1144,7 @@ class ApplicationUpdate:
         transaction_id: str,
         nonce: str,
         health: dict[str, object],
+        application_path: Path = Path("/Applications/Yulu.app"),
     ) -> dict[str, object]:
         self._require_binding(transaction_id, nonce)
         assert self._journal is not None
@@ -1139,6 +1157,7 @@ class ApplicationUpdate:
         healthy = isinstance(target, dict) and _valid_update_health(
             health,
             expected=target,
+            application_path=application_path,
         )
         if not healthy:
             if phase == "previous_services_reconciled":
@@ -1582,6 +1601,7 @@ def run_update_session(
                     transaction_id=transaction_id,
                     nonce=nonce,
                     health=health,
+                    application_path=application_path,
                 )
             else:
                 raise MigrationBlocked("application update session action is invalid")

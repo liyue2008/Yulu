@@ -11,7 +11,13 @@ import Sparkle
 #endif
 
 struct LaunchPolicy: Encodable {
-    static let installedBundlePath = "/Applications/Yulu.app"
+    static let systemInstalledBundlePath = "/Applications/Yulu.app"
+
+    static var userInstalledBundlePath: String {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Applications/Yulu.app", isDirectory: true)
+            .path
+    }
 
     let installed: Bool
     let persistentRegistrationAllowed: Bool
@@ -39,12 +45,18 @@ struct LaunchPolicy: Encodable {
             .standardizedFileURL
             .resolvingSymlinksInPath()
             .path
-        let installed = resolved == installedBundlePath
+        let supportedPaths = [systemInstalledBundlePath, userInstalledBundlePath].map {
+            URL(fileURLWithPath: $0)
+                .standardizedFileURL
+                .resolvingSymlinksInPath()
+                .path
+        }
+        let installed = supportedPaths.contains(resolved)
         return LaunchPolicy(
             installed: installed,
             persistentRegistrationAllowed: installed,
             componentsStarted: installed,
-            guidance: installed ? nil : "Drag Yulu to Applications before opening it."
+            guidance: installed ? nil : "Move Yulu to /Applications or ~/Applications before opening it."
         )
     }
 }
@@ -3372,7 +3384,7 @@ if CommandLine.arguments.count == 3, CommandLine.arguments[1] == "--inspect-comp
 if CommandLine.arguments.count == 2, CommandLine.arguments[1] == "--run-host-service" {
     let policy = LaunchPolicy.evaluate(bundlePath: Bundle.main.bundleURL.path)
     guard policy.persistentRegistrationAllowed else {
-        fputs("[Yulu] Host service refuses to run outside /Applications/Yulu.app\n", stderr)
+        fputs("[Yulu] Host service requires Yulu.app in /Applications or ~/Applications\n", stderr)
         exit(78)
     }
     HostServiceExecution.make(
@@ -4481,7 +4493,7 @@ final class YuluApplication: NSObject, NSApplicationDelegate {
         configureWindowChrome(window)
         self.window = window
         if let guidance = launchPolicy.guidance {
-            window.contentView = centeredMessage(guidance, detail: "Yulu runs services and updates only from /Applications/Yulu.app.")
+            window.contentView = centeredMessage(guidance, detail: "Yulu runs services and updates only from /Applications/Yulu.app or ~/Applications/Yulu.app.")
         } else if let applicationPaths {
             window.contentView = centeredMessage("Starting Yulu…", detail: "Waiting for the bundled Host.")
             let coordinator = ApplicationUpdateCoordinator(

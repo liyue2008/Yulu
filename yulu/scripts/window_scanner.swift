@@ -3,8 +3,7 @@ import ApplicationServices
 
 func getAllWindowTitles() -> [[String: String]] {
     var results: [[String: String]] = []
-    let apps = NSRunningApplication.runningApplications(withBundleIdentifier: "")
-    
+
     for app in NSWorkspace.shared.runningApplications {
         guard app.activationPolicy == .regular else { continue }
         let appElem = AXUIElementCreateApplication(app.processIdentifier)
@@ -28,9 +27,9 @@ func getAllWindowTitles() -> [[String: String]] {
     return results
 }
 
-// Request permission if needed
-let options: NSDictionary = [kAXTrustedCheckOptionPrompt.takeRetainedValue() as NSString: true]
-let trusted = AXIsProcessTrustedWithOptions(options)
+// Window titles are optional enrichment. Never prompt for Accessibility here;
+// meeting-app process detection remains available without that permission.
+let trusted = AXIsProcessTrusted()
 
 if trusted {
     let windows = getAllWindowTitles()

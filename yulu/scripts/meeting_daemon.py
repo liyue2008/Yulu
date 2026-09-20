@@ -21,6 +21,7 @@
   detect [once|daemon]                     检测当前是否处于会议/通话场景
 """
 
+import fcntl
 import json
 import os
 import signal
@@ -56,6 +57,7 @@ from recording_lock import (
 
 CONFIG_DIR = DURABLE_DATA_DIR
 SCHEDULE_PATH = CONFIG_DIR / "schedule.json"
+SCHEDULE_LOCK_PATH = IPC_DIR / "schedule.lock"
 STATE_PATH = CONFIG_DIR / ".state.json"
 SCHEDULER_PID = IPC_DIR / ".scheduler.pid"
 MCP_TOKEN_PATH = CONFIG_DIR / "mcp-token.json"
@@ -685,14 +687,61 @@ def _meeting_duration(meeting_id):
     return DEFAULT_DURATION_MIN
 
 
+def _update_runtime_events(mutator):
+    """Serialize schedule event changes across reminder child processes."""
+    SCHEDULE_LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
+    lock_fd = os.open(
+        SCHEDULE_LOCK_PATH,
+        os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW,
+        0o600,
+    )
+    try:
+        os.fchmod(lock_fd, 0o600)
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        data = load_schedule()
+        changed = bool(mutator(data))
+        if changed:
+            save_schedule(data)
+        return changed
+    finally:
+        os.close(lock_fd)
+
+
 def _add_runtime_event(ev):
-    """运行时给 schedule 加一个事件并通知调度器。"""
-    data = load_schedule()
-    data["events"].append(ev)
-    save_schedule(data)
+    """Upsert one runtime event and notify the scheduler."""
+    event_id = str(ev.get("id", ""))
+
+    def upsert(data):
+        events = data.setdefault("events", [])
+        if event_id:
+            events[:] = [item for item in events if item.get("id") != event_id]
+        events.append(ev)
+        return True
+
+    _update_runtime_events(upsert)
 
 
-def cmd_auto_stop():
+def _consume_runtime_event(event_id):
+    """Claim a persisted reminder once before opening its modal prompt."""
+    if not event_id:
+        return True
+
+    def consume(data):
+        events = data.setdefault("events", [])
+        kept = [item for item in events if item.get("id") != event_id]
+        if len(kept) == len(events):
+            return False
+        events[:] = kept
+        return True
+
+    return _update_runtime_events(consume)
+
+
+def cmd_auto_stop(event_id=None):
+    if event_id and not _consume_runtime_event(event_id):
+        print(f"忽略已处理的录音提醒: {event_id}")
+        return
+
     rec = recording_info(load_state())
     if not rec:
         print("没有正在进行的录制")
@@ -894,7 +943,7 @@ def main():
         "list": lambda: cmd_list(),
         "remove": lambda: cmd_remove(args),
         "ask_record": lambda: cmd_ask_record(args),
-        "auto_stop": lambda: cmd_auto_stop(),
+        "auto_stop": lambda: cmd_auto_stop(args[0] if args else None),
         "stop": lambda: cmd_stop(),
         "detect": lambda: subprocess.run([
             sys.executable,

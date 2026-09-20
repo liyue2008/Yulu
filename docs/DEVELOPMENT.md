@@ -10,7 +10,7 @@ Yulu has five separate layers. Keep them separate:
 
 Keep the editable checkout separate from `~/.yulu`, which is the development
 runtime used by `make dev-install`. Public releases run from
-`/Applications/Yulu.app`.
+`/Applications/Yulu.app` or the current user's `~/Applications/Yulu.app`.
 
 ## Daily loop
 

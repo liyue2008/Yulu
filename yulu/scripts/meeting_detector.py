@@ -230,49 +230,47 @@ def _compile_patterns(words):
     return [re.compile(re.escape(w), re.I) for w in words if w]
 
 
+def _detect_running_meeting_app(cfg, ignore_patterns, window_patterns):
+    """Detect a launched meeting app without requesting Accessibility access."""
+    try:
+        running_apps = collect_visible_apps()
+    except Exception:
+        return None
+
+    dedicated = _compile_patterns(cfg.get("dedicated_meeting_apps", []))
+    for app in running_apps:
+        if any(p.search(app) for p in dedicated):
+            return {
+                "active": True,
+                "title": app,
+                "app": app,
+                "window": "",
+                "signature": signature(app, "running-process"),
+                "fallback": "running_process",
+            }
+
+    for app in running_apps:
+        if any(p.search(app) for p in ignore_patterns):
+            continue
+        if any(p.search(app) for p in window_patterns):
+            return {
+                "active": True,
+                "title": app,
+                "app": app,
+                "window": "",
+                "signature": signature(app, "running-process-keyword"),
+                "fallback": "running_process",
+            }
+    return None
+
+
 def detect_meeting(cfg):
     """返回检测结果或 None。"""
     window_patterns = _compile_patterns(cfg.get("window_keywords", []))
     ignore_patterns = _compile_patterns(cfg.get("ignore_window_keywords", []))
     app_hints = _compile_patterns(cfg.get("app_name_hints", []))
 
-    windows = collect_windows(cfg.get("target_app_names"))
-    if windows is None:
-        # 无辅助功能权限时用可见 app 名做简易检测
-        try:
-            visible_apps = collect_visible_apps()
-            # 只检查你的真实会议 app
-            dedicated = _compile_patterns(cfg.get("dedicated_meeting_apps", []))
-            for app in visible_apps:
-                if any(p.search(app) for p in dedicated):
-                    return {
-                        "active": True,
-                        "title": app,
-                        "app": app,
-                        "window": "",
-                        "signature": signature(app, "visible-app"),
-                        "fallback": "visible_app",
-                    }
-            # 也用窗口关键词匹配 visible app 名（仅当 app 名包含会议词汇才触发）
-            for app in visible_apps:
-                if any(p.search(app) for p in ignore_patterns):
-                    continue
-                if any(p.search(app) for p in window_patterns):
-                    return {
-                        "active": True,
-                        "title": app,
-                        "app": app,
-                        "window": "",
-                        "signature": signature(app, "visible-keyword"),
-                        "fallback": "visible_keyword",
-                    }
-        except Exception:
-            pass
-        return {
-            "active": False,
-            "permission_hint": "系统设置 → 隐私与安全性 → 辅助功能，添加 Python.app（/opt/homebrew/Cellar/python@3.14/.../Python.app）以获取完整窗口标题检测。",
-        }
-
+    windows = collect_windows(cfg.get("target_app_names")) or []
     matches = []
     for w in windows:
         haystack = f"{w['app']} {w['title']}"
@@ -295,6 +293,9 @@ def detect_meeting(cfg):
             "matches": matches[:5],
         }
 
+    running_match = _detect_running_meeting_app(cfg, ignore_patterns, window_patterns)
+    if running_match is not None:
+        return running_match
     return {"active": False, "windows": windows[:10]}
 
 

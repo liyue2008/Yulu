@@ -1,9 +1,11 @@
 # Register services only from Applications
 
 Yulu registers background services and enables updates only when launched from
-`/Applications/Yulu.app`. Launching from a mounted DMG or another location shows
-drag-to-Applications guidance and performs no persistent service mutation, which
-keeps helper paths, Gatekeeper validation, and updates deterministic.
+`/Applications/Yulu.app` or the current user's `~/Applications/Yulu.app`.
+Launching from a mounted DMG or another location shows move-to-Applications
+guidance and performs no persistent service mutation, which keeps helper paths,
+Gatekeeper validation, and updates deterministic without requiring administrator
+access for a user-local install.
 
 The bundled jobs use `com.yulu.app.host` and `com.yulu.app.capture`. Their
 launchd labels must be distinct from repository-install LaunchAgents: macOS can
