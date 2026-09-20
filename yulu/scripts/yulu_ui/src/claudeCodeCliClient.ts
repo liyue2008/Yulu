@@ -34,6 +34,10 @@ function asRecord(value: unknown): Record<string, unknown> {
     : {};
 }
 
+function stringValue(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+
 function runCommand(input: {
   executable: string;
   args: string[];
@@ -128,6 +132,8 @@ export class ClaudeCodeCliRuntimeClient implements ClaudeCodeRuntimeClient {
       "LANG",
       "LC_ALL",
       "LC_CTYPE",
+      "USER",
+      "LOGNAME",
     ]);
     const safe: NodeJS.ProcessEnv = {};
     for (const source of [process.env, this.env]) {
@@ -141,6 +147,7 @@ export class ClaudeCodeCliRuntimeClient implements ClaudeCodeRuntimeClient {
         if (value !== undefined) safe[name] = value;
       }
     }
+    if (toolFree) safe.CLAUDE_CODE_DISABLE_TERMINAL_TITLE = "1";
     return envWithFallbackPath(safe);
   }
 
@@ -187,8 +194,12 @@ export class ClaudeCodeCliRuntimeClient implements ClaudeCodeRuntimeClient {
         ...(this.supportsMaxTurns ? ["probe-bounds"] : []),
         ...(help.includes("--tools") && help.includes("--disallowedTools") &&
           help.includes("--strict-mcp-config") && help.includes("--mcp-config") ? ["tools/none"] : []),
-      ...(help.includes("--disable-slash-commands") && help.includes("--no-session-persistence")
-        ? ["probe-isolation"] : []),
+        ...(help.includes("--disable-slash-commands") && help.includes("--no-session-persistence")
+          ? ["probe-isolation"] : []),
+        ...(help.includes("--include-hook-events") && help.includes("--setting-sources") &&
+          help.includes("--settings") ? ["managed-hooks/none"] : []),
+        ...(help.includes("--verbose") && help.includes("stream-json")
+          ? ["provider-identity"] : []),
         ...(help.includes("--fallback-model") ? ["fallback-model/opt-in"] : []),
       ];
       const authResult = await runCommand({
@@ -265,6 +276,7 @@ export class ClaudeCodeCliRuntimeClient implements ClaudeCodeRuntimeClient {
         "--no-chrome",
         "--include-hook-events",
         "--system-prompt", "",
+        "--prompt-suggestions", "false",
         "--no-session-persistence",
       ] : []),
     ];
@@ -300,6 +312,11 @@ export class ClaudeCodeCliRuntimeClient implements ClaudeCodeRuntimeClient {
       const runtimeVersion = typeof init?.claude_code_version === "string" ? init.claude_code_version : "";
       const modelUsage = asRecord(terminal?.modelUsage);
       const usedModels = Object.keys(modelUsage);
+      const usedProviders = [...new Set(
+        Object.values(modelUsage)
+          .map((usage) => stringValue(asRecord(usage).provider))
+          .filter(Boolean),
+      )];
       const actualModel = usedModels.length === 1
         ? usedModels[0]!
         : !terminal && usedModels.length === 0
@@ -336,11 +353,14 @@ export class ClaudeCodeCliRuntimeClient implements ClaudeCodeRuntimeClient {
       const fallbackOccurred = actualModel !== input.model ||
         (Boolean(initModel) && initModel !== input.model) ||
         usedModels.some((model) => model !== input.model);
-      // The current Claude CLI init schema proves tools, MCP, skills, commands,
-      // and plugins, but does not expose whether policy-managed hooks are empty.
-      // Keep Summary fail-closed until the same invocation can prove that last
-      // side-effect surface as well.
-      const isolationProven = false;
+      const isolationSurfacesReported = [
+        init?.tools,
+        init?.mcp_servers,
+        init?.slash_commands,
+        init?.skills,
+        init?.plugins,
+      ].every(Array.isArray);
+      const isolationProven = isolated && isolationSurfacesReported && toolCalls.length === 0;
       const answer = typeof terminal?.result === "string" ? terminal.result : "";
       const completed = result.code === 0 && terminal?.subtype === "success" && terminal.is_error !== true;
       return {
@@ -348,6 +368,7 @@ export class ClaudeCodeCliRuntimeClient implements ClaudeCodeRuntimeClient {
         answer,
         nativeSessionId,
         actualModel,
+        actualProvider: usedProviders.length === 1 ? usedProviders[0]! : null,
         requestId: typeof terminal?.uuid === "string"
           ? terminal.uuid
           : !terminal && typeof init?.uuid === "string"
