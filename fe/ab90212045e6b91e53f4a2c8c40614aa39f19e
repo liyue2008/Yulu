@@ -1,0 +1,21 @@
+yulu/scripts/config.example.json
+  ai_agent 105
+tests/test_meeting_daemon_stop.py
+  ai_agent 1-2,6,12-13,153,186-188,191,194,221,223,231,285,313,340-362,366,429,433-434,445,451,458,461-462
+tests/test_meeting_detector_processes.py
+  ai_agent 124-127,137,141-199
+yulu/scripts/meeting_daemon.py
+  ai_agent 21,808-821,979-982,993
+yulu/scripts/meeting_detector.py
+  ai_agent 38,89,541-545,549-551,557-637,678-683,719-725
+yulu/scripts/yulu_ui/src/settingsRegistry.ts
+  ai_agent 108
+yulu/scripts/yulu_ui/tests/settingsRegistry.test.ts
+  ai_agent 97
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.4",
+  "base_commit_sha": "feab90212045e6b91e53f4a2c8c40614aa39f19e",
+  "prompts": {}
+}
