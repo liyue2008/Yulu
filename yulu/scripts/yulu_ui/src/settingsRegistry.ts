@@ -104,6 +104,7 @@ export const SETTINGS: SettingDef[] = [
   { path: "meeting_detection.interval_sec",        category: "automation", label: "Poll interval (s)",  type: "number",  validate: z.number().min(1), reload: R.restart("detector") },
   { path: "meeting_detection.stable_sec",          category: "automation", label: "Stable window (s)",  type: "number",  validate: z.number().min(1), reload: R.restart("detector") },
   { path: "meeting_detection.prompt_cooldown_sec", category: "automation", label: "Prompt cooldown (s)", type: "number", validate: z.number().min(0), reload: R.restart("detector") },
+  { path: "meeting_detection.lark_cli_active_meeting", category: "automation", label: "Lark active meeting detection", type: "toggle", validate: z.boolean(), reload: R.restart("detector"), advanced: true },
   // The large keyword/app match arrays — advanced, edited as string-array chips
   // behind the automation "Advanced" disclosure (P3-2). All restart-class
   // (detector reads them at startup).

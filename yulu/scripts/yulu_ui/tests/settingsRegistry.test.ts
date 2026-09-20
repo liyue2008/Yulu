@@ -87,8 +87,14 @@ describe("settingsRegistry", () => {
       expect(defFor(path)).toBeUndefined();
     }
   });
-  it("meeting_detection 4 项改完都要 restart detector", () => {
-    for (const p of ["meeting_detection.enabled", "meeting_detection.interval_sec", "meeting_detection.stable_sec", "meeting_detection.prompt_cooldown_sec"]) {
+  it("meeting_detection 基础项改完都要 restart detector", () => {
+    for (const p of [
+      "meeting_detection.enabled",
+      "meeting_detection.interval_sec",
+      "meeting_detection.stable_sec",
+      "meeting_detection.prompt_cooldown_sec",
+      "meeting_detection.lark_cli_active_meeting",
+    ]) {
       expect(reloadFor(p)).toEqual({ kind: "restart", daemons: ["detector"] });
     }
   });

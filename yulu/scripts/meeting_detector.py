@@ -17,6 +17,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -83,6 +84,7 @@ DEFAULT_CONFIG = {
         "--module=renderer-byteview", "--module=renderer-meeting",
     ],
     "auto_record_apps": [],
+    "lark_cli_active_meeting": False,
     "ignore_window_keywords": [
         "Calendar", "日历", "Gmail", "Inbox", "Settings", "Preferences",
         "聊天", "通讯录", "朋友圈", "文件传输助手",
@@ -250,6 +252,76 @@ def collect_running_process_commands():
     return [line.strip() for line in result.stdout.splitlines() if line.strip()]
 
 
+def _lark_cli_executable():
+    candidates = [
+        shutil.which("lark-cli"),
+        str(Path.home() / ".npm-global/bin/lark-cli"),
+        str(Path.home() / ".local/bin/lark-cli"),
+        str(Path.home() / "bin/lark-cli"),
+    ]
+    for candidate in candidates:
+        if not candidate:
+            continue
+        try:
+            executable = Path(candidate).is_file() and os.access(candidate, os.X_OK)
+        except OSError:
+            executable = False
+        if executable:
+            return candidate
+    return None
+
+
+def _detect_lark_cli_meeting(cfg):
+    enabled = cfg.get("lark_cli_active_meeting")
+    if type(enabled) is not bool or not enabled:
+        return None
+    executable = _lark_cli_executable()
+    if not executable:
+        return None
+    try:
+        result = subprocess.run(
+            [
+                executable,
+                "vc",
+                "+meeting-list-active",
+                "--as",
+                "user",
+                "--format",
+                "json",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=8,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode != 0 or len(result.stdout.encode("utf-8")) > 1024 * 1024:
+        return None
+    try:
+        payload = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return None
+    data = payload.get("data") if isinstance(payload, dict) else None
+    meetings = data.get("meetings") if isinstance(data, dict) else None
+    if not isinstance(meetings, list) or not meetings:
+        return None
+    meeting = meetings[0]
+    if not isinstance(meeting, dict):
+        return None
+    meeting_id = str(meeting.get("meeting_id", "")).strip()
+    title = normalize_title(str(meeting.get("meeting_title", "")).strip() or "Lark Meeting")
+    if not meeting_id:
+        return None
+    return {
+        "active": True,
+        "title": title,
+        "app": "Lark",
+        "window": "",
+        "signature": signature("Lark", meeting_id),
+        "fallback": "lark_cli",
+    }
+
+
 def _compile_patterns(words):
     return [re.compile(re.escape(w), re.I) for w in words if w]
 
@@ -316,6 +388,10 @@ def _detect_running_meeting_app(cfg, ignore_patterns, window_patterns):
 
 def detect_meeting(cfg):
     """返回检测结果或 None。"""
+    lark_meeting = _detect_lark_cli_meeting(cfg)
+    if lark_meeting is not None:
+        return lark_meeting
+
     window_patterns = _compile_patterns(cfg.get("window_keywords", []))
     ignore_patterns = _compile_patterns(cfg.get("ignore_window_keywords", []))
     app_hints = _compile_patterns(cfg.get("app_name_hints", []))
