@@ -20,6 +20,7 @@ import re
 import subprocess
 import sys
 import time
+from contextlib import suppress
 from datetime import datetime
 from pathlib import Path
 
@@ -31,7 +32,8 @@ from application_paths import (
     LEGACY_READ_ONLY_DATA_DIR,
     LOGS_DIR,
 )
-from state_store import is_recording_active as state_recording_active, load_state as load_recording_state
+from state_store import is_recording_active as state_recording_active
+from state_store import load_state as load_recording_state
 
 CONFIG_DIR = DURABLE_DATA_DIR
 STATE_PATH = CONFIG_DIR / ".detector_state.json"
@@ -105,7 +107,8 @@ def _query_audio_daemon():
         data = b""
         while True:
             chunk = sock.recv(4096)
-            if not chunk: break
+            if not chunk:
+                break
             data += chunk
         sock.close()
         resp = json.loads(data.decode())
@@ -206,7 +209,7 @@ def is_recording_active():
         if state_recording_active(state):
             return True
     except Exception:
-        pass
+        return (IPC_DIR / ".recording_pid").exists()
     return (IPC_DIR / ".recording_pid").exists()
 
 
@@ -360,7 +363,7 @@ def normalize_title(title):
 
 def signature(app, title):
     raw = f"{app}|{title}".encode("utf-8", errors="ignore")
-    return hashlib.sha1(raw).hexdigest()[:12]
+    return hashlib.sha256(raw).hexdigest()[:12]
 
 
 def recently_prompted(state, sig, cooldown_sec):
@@ -368,9 +371,19 @@ def recently_prompted(state, sig, cooldown_sec):
     now = time.time()
     # 顺手清理过期记录
     for key, ts in list(prompted.items()):
-        if now - float(ts) > cooldown_sec * 2:
+        try:
+            expired = now - float(ts) > cooldown_sec * 2
+        except (TypeError, ValueError):
+            expired = True
+        if expired:
             prompted.pop(key, None)
-    return sig in prompted and now - float(prompted[sig]) < cooldown_sec
+    if sig not in prompted:
+        return False
+    try:
+        return now - float(prompted[sig]) < cooldown_sec
+    except (TypeError, ValueError):
+        prompted.pop(sig, None)
+        return False
 
 
 def mark_prompted(state, sig):
@@ -403,9 +416,15 @@ def run_daemon(args):
 
     PID_PATH.parent.mkdir(parents=True, exist_ok=True)
     PID_PATH.write_text(str(os.getpid()))
-    interval = int(cfg.get("interval_sec", 10))
-    stable_sec = int(cfg.get("stable_sec", 15))
-    cooldown = int(cfg.get("prompt_cooldown_sec", 1800))
+    try:
+        interval = max(1, int(cfg.get("interval_sec", 10)))
+        stable_sec = max(0, int(cfg.get("stable_sec", 15)))
+        cooldown = max(0, int(cfg.get("prompt_cooldown_sec", 1800)))
+    except (TypeError, ValueError):
+        interval = 10
+        stable_sec = 15
+        cooldown = 1800
+        log("invalid meeting detection timing config; using defaults")
 
     state = load_state()
     active_since = None
@@ -461,10 +480,8 @@ def run_daemon(args):
             prompt_recording(title)
             time.sleep(interval)
     finally:
-        try:
+        with suppress(Exception):
             PID_PATH.unlink(missing_ok=True)
-        except Exception:
-            pass
 
 
 def main():

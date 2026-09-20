@@ -22,10 +22,16 @@ import signal
 import subprocess
 import sys
 import threading
+from contextlib import suppress
 from datetime import datetime
 from pathlib import Path
 
-from application_paths import DURABLE_DATA_DIR, IPC_DIR, LEGACY_READ_ONLY_DATA_DIR, LOGS_DIR
+from application_paths import (
+    DURABLE_DATA_DIR,
+    IPC_DIR,
+    LEGACY_READ_ONLY_DATA_DIR,
+    LOGS_DIR,
+)
 
 CONFIG_DIR = DURABLE_DATA_DIR
 SCHEDULE_PATH = CONFIG_DIR / "schedule.json"
@@ -189,10 +195,8 @@ def main():
     try:
         sched.run()
     finally:
-        try:
+        with suppress(Exception):
             PID_PATH.unlink(missing_ok=True)
-        except Exception:
-            pass
         log("scheduler 已退出")
 
 

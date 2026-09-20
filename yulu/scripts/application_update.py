@@ -14,10 +14,12 @@ import subprocess
 import sys
 import time
 import uuid
+from collections.abc import Callable
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable, TextIO
+from typing import TextIO
 
 from application_migration import (
     ApplicationMigration,
@@ -34,7 +36,6 @@ from application_migration import (
     open_existing_trusted_install_directory,
     swap_entries_at,
 )
-
 
 _PRODUCT_IDENTIFIER = "com.yulu.app"
 _PRODUCT_TEAM_IDENTIFIER = "WMU9678ZQL"
@@ -65,10 +66,16 @@ def _parse_release_identity(value: str) -> tuple[tuple[int, int, int], int | Non
     match = _RELEASE_IDENTITY_PATTERN.fullmatch(value)
     if match is None:
         return None
-    return (
-        (int(match.group(1)), int(match.group(2)), int(match.group(3))),
-        int(match.group(4)) if match.group(4) is not None else None,
-    )
+    try:
+        base = (
+            int(match.group(1)),
+            int(match.group(2)),
+            int(match.group(3)),
+        )
+        prerelease = int(match.group(4)) if match.group(4) is not None else None
+    except (TypeError, ValueError):
+        return None
+    return (base, prerelease)
 
 
 def _release_identity_is_forward(source: str, target: str) -> bool:
@@ -200,8 +207,10 @@ def _valid_update_health(
         )
     except ValueError:
         nonce_is_valid = False
+    native_controls_ready = application.get("nativeControlsReady")
     return (
-        application.get("nativeControlsReady") is True
+        type(native_controls_ready) is bool
+        and native_controls_ready
         and host.get("hostIPCVersion") == _HOST_IPC_VERSION
         and host.get("serviceOwner") == "com.yulu.app.host"
         and host.get("portOwnerPID") == host_pid
@@ -357,7 +366,7 @@ def restore_previous_application(
                 info = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
             except FileNotFoundError:
                 if name == installed_application.name:
-                    raise MigrationBlocked("installed application is missing")
+                    raise MigrationBlocked("installed application is missing") from None
                 continue
             if not stat.S_ISDIR(info.st_mode) or info.st_uid not in {0, os.geteuid()}:
                 raise MigrationBlocked("rollback install destination is occupied or unsafe")
@@ -435,10 +444,8 @@ def restore_previous_application(
         return failed_path
     except Exception:
         if swapped_name is not None:
-            try:
+            with suppress(MigrationBlocked):
                 swap_entries_at(parent_fd, installed_application.name, swapped_name)
-            except MigrationBlocked:
-                pass
         raise
     finally:
         os.close(parent_fd)
@@ -567,7 +574,7 @@ class ApplicationUpdate:
         self._journal_dir_fd = -1
         self._journal: dict[str, object] | None = None
 
-    def __enter__(self) -> "ApplicationUpdate":
+    def __enter__(self) -> ApplicationUpdate:
         migration_authority = ApplicationMigration(self.paths.migration_paths)
         migration_authority.__enter__()
         self._migration_authority = migration_authority
@@ -637,7 +644,10 @@ class ApplicationUpdate:
                 os.fsync(directory_fd)
             finally:
                 os.close(directory_fd)
-            os.rmdir(path.name, dir_fd=self._journal_dir_fd)
+            try:
+                os.rmdir(path.name, dir_fd=self._journal_dir_fd)
+            except OSError as exc:
+                raise MigrationBlocked("application update cleanup failed") from exc
         os.fsync(self._journal_dir_fd)
         self._journal = None
 
@@ -658,8 +668,13 @@ class ApplicationUpdate:
         if (
             re.fullmatch(r"[1-9][0-9]*", from_build) is None
             or re.fullmatch(r"[1-9][0-9]*", to_build) is None
-            or int(to_build) <= int(from_build)
         ):
+            raise MigrationBlocked("application update build is not monotonic")
+        try:
+            build_is_forward = int(to_build) > int(from_build)
+        except ValueError:
+            build_is_forward = False
+        if not build_is_forward:
             raise MigrationBlocked("application update build is not monotonic")
         self._journal = {
             "schemaVersion": 1,
@@ -697,8 +712,8 @@ class ApplicationUpdate:
             "deferred_recording",
         }:
             raise MigrationBlocked("recording was observed in the wrong update phase")
-        if recording is not False:
-            reason = "recording-active" if recording is True else "recording-unknown"
+        if type(recording) is not bool or recording:
+            reason = "recording-active" if type(recording) is bool and recording else "recording-unknown"
             self._journal = {
                 **self._journal,
                 "phase": "deferred_recording",
@@ -1437,8 +1452,8 @@ def run_update_session(
         preflight = _read_session_message(input_stream).get("recording")
         if preflight is not None and type(preflight) is not bool:
             raise MigrationBlocked("Capture recording observation is invalid")
-        if preflight is not False:
-            reason = "recording-active" if preflight is True else "recording-unknown"
+        if type(preflight) is not bool or preflight:
+            reason = "recording-active" if type(preflight) is bool and preflight else "recording-unknown"
             action = {"action": "defer_installation", "reason": reason}
             _write_session_action(output_stream, action)
             return action
@@ -1462,10 +1477,10 @@ def run_update_session(
                 locked_recording = _read_session_message(input_stream).get("recording")
                 if locked_recording is not None and type(locked_recording) is not bool:
                     raise MigrationBlocked("Capture recording observation is invalid")
-                if locked_recording is not False:
+                if type(locked_recording) is not bool or locked_recording:
                     reason = (
                         "recording-active"
-                        if locked_recording is True
+                        if type(locked_recording) is bool and locked_recording
                         else "recording-unknown"
                     )
                     action = {"action": "defer_installation", "reason": reason}
@@ -1631,8 +1646,20 @@ def _run_recovery(arguments: argparse.Namespace) -> int:
             or not isinstance(journal.get("failedTargetApplication"), dict)
         ):
             raise MigrationBlocked("rollback journal is not ready")
-        expected_identity = dict(journal["previousApplication"])
-        expected_target_identity = dict(journal["failedTargetApplication"])
+        previous_identity = journal["previousApplication"]
+        target_identity = journal["failedTargetApplication"]
+        assert isinstance(previous_identity, dict)
+        assert isinstance(target_identity, dict)
+        expected_identity: dict[str, object] = {}
+        expected_target_identity: dict[str, object] = {}
+        for key, value in previous_identity.items():
+            if not isinstance(key, str):
+                raise MigrationBlocked("previous application identity is invalid")
+            expected_identity[key] = value
+        for key, value in target_identity.items():
+            if not isinstance(key, str):
+                raise MigrationBlocked("failed application identity is invalid")
+            expected_target_identity[key] = value
         nonce = str(journal["nonce"])
     failed_application = restore_previous_application(
         installed_application=Path(arguments.application),
