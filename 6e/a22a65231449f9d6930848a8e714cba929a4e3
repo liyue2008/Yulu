@@ -1,0 +1,17 @@
+yulu/scripts/yulu_ui/src/settingsRegistry.ts
+  ai_agent 107
+yulu/scripts/meeting_detector.py
+  ai_agent 20,87,255-324,391-394
+yulu/scripts/config.example.json
+  ai_agent 104
+yulu/scripts/yulu_ui/tests/settingsRegistry.test.ts
+  ai_agent 90-97
+tests/test_meeting_detector_processes.py
+  ai_agent 4,25-69
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.4",
+  "base_commit_sha": "6ea22a65231449f9d6930848a8e714cba929a4e3",
+  "prompts": {}
+}
