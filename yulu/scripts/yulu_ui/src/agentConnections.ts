@@ -1130,9 +1130,11 @@ export class AgentConnectionCenter {
           : result.status === "failed"
             ? result.remediation ?? `${input.capability} · ${model} failed`
             : `${input.capability} · ${model} failed; the exact Codex executable, authorization, version, features, or model changed during the probe`,
-        reason: result.reason === "invalid_model"
-          ? "invalid_model"
-          : result.reason === "unknown_outcome" ? "unknown_outcome" : "readiness_failed",
+        ...(effectiveStatus === "failed" ? {
+          reason: result.reason === "invalid_model"
+            ? "invalid_model" as const
+            : result.reason === "unknown_outcome" ? "unknown_outcome" as const : "readiness_failed" as const,
+        } : {}),
       };
       this.codexReadiness.set(readinessKey, {
         readiness,
@@ -1228,7 +1230,9 @@ export class AgentConnectionCenter {
           : result.status === "failed"
             ? result.remediation ?? `${input.capability} · ${model} failed`
             : `${input.capability} · ${model} failed; the exact Claude executable, authorization, version, features, model, or session changed during the probe`,
-        reason: result.reason === "unknown_outcome" ? "unknown_outcome" : "readiness_failed",
+        ...(effectiveStatus === "failed" ? {
+          reason: result.reason === "unknown_outcome" ? "unknown_outcome" as const : "readiness_failed" as const,
+        } : {}),
       };
       this.claudeReadiness.set(readinessKey, {
         readiness,

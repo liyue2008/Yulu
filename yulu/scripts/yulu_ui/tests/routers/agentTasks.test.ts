@@ -64,8 +64,33 @@ describe("agentTasksRouter", () => {
     expect(retry).not.toHaveBeenCalled();
   });
 
+  it("creates a replacement attempt with the currently selected Summary Provider", async () => {
+    const id = "019f0000-0000-7000-8000-000000000143";
+    const replacement = {
+      id: "019f0000-0000-7000-8000-000000000144",
+      state: "transcript_committed",
+      summaryProvider: "claude-code",
+      summaryModel: "claude-sonnet-5",
+      leaseToken: "replacement-secret-lease",
+    };
+    const replaceSummaryProvider = vi.fn(() => replacement);
+    const caller = createCaller(agentTasksRouter, {
+      uiMutationAuthorized: true,
+      recordingPipeline: { replaceSummaryProvider },
+    } as unknown as AppContext);
+
+    await expect(caller.replaceSummaryProvider({ id })).resolves.toEqual({
+      id: replacement.id,
+      state: "transcript_committed",
+      summaryProvider: "claude-code",
+      summaryModel: "claude-sonnet-5",
+    });
+    expect(replaceSummaryProvider).toHaveBeenCalledWith(id);
+  });
+
   it("requires the UI bearer for an explicit replacement Summary attempt", async () => {
     const id = "019f0000-0000-7000-8000-000000000141";
+    const replaceSummaryProvider = vi.fn();
     const createSummaryAttemptFromUnknown = vi.fn(() => ({
       id: "019f0000-0000-7000-8000-000000000142",
       state: "queued",
@@ -73,13 +98,16 @@ describe("agentTasksRouter", () => {
     }));
     const ctx = {
       uiMutationAuthorized: false,
-      recordingPipeline: { createSummaryAttemptFromUnknown },
+      recordingPipeline: { createSummaryAttemptFromUnknown, replaceSummaryProvider },
     } as unknown as AppContext;
     const caller = createCaller(agentTasksRouter, ctx);
 
     await expect(caller.createSummaryAttemptFromUnknown({ id }))
       .rejects.toThrow("UI mutation bearer required");
+    await expect(caller.replaceSummaryProvider({ id }))
+      .rejects.toThrow("UI mutation bearer required");
     expect(createSummaryAttemptFromUnknown).not.toHaveBeenCalled();
+    expect(replaceSummaryProvider).not.toHaveBeenCalled();
 
     ctx.uiMutationAuthorized = true;
     await expect(caller.createSummaryAttemptFromUnknown({ id }))
