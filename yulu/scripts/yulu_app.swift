@@ -61,6 +61,19 @@ struct LaunchPolicy: Encodable {
     }
 }
 
+enum ComponentOwnershipMode: String, Encodable {
+    case backgroundServices = "background_services"
+    case directChildren = "direct_children"
+
+    static var current: ComponentOwnershipMode {
+        #if YULU_DEVELOPMENT_SMOKE
+        .directChildren
+        #else
+        .backgroundServices
+        #endif
+    }
+}
+
 struct BackgroundServiceDescriptor {
     let plistName: String
     let label: String
@@ -2636,6 +2649,12 @@ func writeJSON<T: Encodable>(_ value: T) throws {
     FileHandle.standardOutput.write(Data("\n".utf8))
 }
 
+if CommandLine.arguments.count == 2,
+   CommandLine.arguments[1] == "--inspect-component-ownership" {
+    try writeJSON(["mode": ComponentOwnershipMode.current.rawValue])
+    exit(0)
+}
+
 func writeJSONObject(_ value: [String: Any]) throws {
     FileHandle.standardOutput.write(
         try JSONSerialization.data(withJSONObject: value, options: [.sortedKeys])
@@ -3290,6 +3309,7 @@ final class ProductSupervisor {
         hostEnvironment["YULU_NATIVE_HELPER_DIR"] = layout.executableDir.path
         if developmentSmoke {
             hostEnvironment["YULU_DEV_SMOKE"] = "1"
+            hostEnvironment["YULU_SERVICE_OWNER"] = "com.yulu.app.host"
         }
         hostEnvironment["YULU_PYTHON"] = layout.bundledPython.path
         hostEnvironment["YULU_FFMPEG"] = layout.bundledFFmpeg.path
@@ -3311,6 +3331,9 @@ final class ProductSupervisor {
         captureEnvironment["YULU_FFMPEG"] = layout.bundledFFmpeg.path
         captureEnvironment["PYTHONDONTWRITEBYTECODE"] = "1"
         captureEnvironment["PATH"] = bundledRuntimePath
+        if developmentSmoke {
+            captureEnvironment["YULU_SERVICE_OWNER"] = "com.yulu.app.capture"
+        }
         capture = ManagedComponent(
             name: "Capture",
             executableURL: layout.captureExecutable,
@@ -4442,6 +4465,9 @@ final class YuluApplication: NSObject, NSApplicationDelegate {
     private var serviceWindow: NSWindow?
     private let backgroundServices = BackgroundServiceRegistry()
     private var migrationCoordinator: ApplicationMigrationCoordinator?
+    #if YULU_DEVELOPMENT_SMOKE
+    private var developmentSupervisor: ProductSupervisor?
+    #endif
     private weak var cancelMigrationMenuItem: NSMenuItem?
     private weak var retryMigrationMenuItem: NSMenuItem?
     private var updateCoordinator: ApplicationUpdateCoordinator?
@@ -4496,6 +4522,9 @@ final class YuluApplication: NSObject, NSApplicationDelegate {
             window.contentView = centeredMessage(guidance, detail: "Yulu runs services and updates only from /Applications/Yulu.app or ~/Applications/Yulu.app.")
         } else if let applicationPaths {
             window.contentView = centeredMessage("Starting Yulu…", detail: "Waiting for the bundled Host.")
+            #if YULU_DEVELOPMENT_SMOKE
+            startDevelopmentRuntime(applicationPaths: applicationPaths)
+            #else
             let coordinator = ApplicationUpdateCoordinator(
                 policy: launchPolicy,
                 layout: layout,
@@ -4534,6 +4563,7 @@ final class YuluApplication: NSObject, NSApplicationDelegate {
             }
             updateCoordinator = coordinator
             coordinator.resume()
+            #endif
         }
         window.center()
         window.makeKeyAndOrderFront(nil)
@@ -4547,6 +4577,9 @@ final class YuluApplication: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         #if canImport(YuluNativeRecording)
         nativeRecording?.stop()
+        #endif
+        #if YULU_DEVELOPMENT_SMOKE
+        developmentSupervisor?.stop()
         #endif
     }
 
@@ -4755,6 +4788,22 @@ final class YuluApplication: NSObject, NSApplicationDelegate {
         migrationCoordinator = coordinator
         coordinator.advance()
     }
+
+    #if YULU_DEVELOPMENT_SMOKE
+    private func startDevelopmentRuntime(applicationPaths: ApplicationDataPaths) {
+        let supervisor = ProductSupervisor(
+            layout: layout,
+            port: port,
+            developmentSmoke: true,
+            applicationPaths: applicationPaths
+        )
+        developmentSupervisor = supervisor
+        migrationCommitted = true
+        supervisor.start()
+        guard activateNativeRecording() else { return }
+        beginServicePolling()
+    }
+    #endif
 
     private func updateStateChanged(_ state: String, detail: String?) {
         switch state {
