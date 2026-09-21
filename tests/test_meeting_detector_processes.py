@@ -69,6 +69,17 @@ def test_meeting_detector_uses_active_lark_cli_meeting_without_accessibility() -
     ]
 
 
+def test_lark_cli_recording_uses_the_exact_meeting_title() -> None:
+    assert meeting_detector.recording_title({
+        "fallback": "lark_cli",
+        "title": "Design review",
+    }) == "Design review"
+    assert meeting_detector.recording_title({
+        "fallback": "meeting_process",
+        "title": "Lark Meeting",
+    }) == "检测到会议：Lark Meeting"
+
+
 def test_meeting_detector_uses_lark_meeting_process_without_accessibility() -> None:
     config = dict(meeting_detector.DEFAULT_CONFIG)
     with (

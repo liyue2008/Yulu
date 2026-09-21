@@ -538,6 +538,13 @@ def prompt_recording(title):
     ])
 
 
+def recording_title(result):
+    title = normalize_title(str(result.get("title", "")).strip() or "会议")
+    if result.get("fallback") == "lark_cli":
+        return title
+    return f"检测到会议：{title}"
+
+
 def detected_meeting_id(result):
     detected_signature = str(result.get("signature", "")).strip()
     return f"detected::{detected_signature}" if detected_signature else ""
@@ -713,7 +720,7 @@ def run_daemon(args):
                 time.sleep(interval)
                 continue
 
-            title = f"检测到会议：{res.get('title', '会议')}"
+            title = recording_title(res)
             mark_prompted(state, sig)
             dispatch = dispatch_recording(cfg, res, title)
             if dispatch == "automatic":
