@@ -1,13 +1,13 @@
-import { useContext, useEffect, useState } from "react";
+import { useContext, useEffect, useRef, useState } from "react";
 import type { CSSProperties, MouseEvent } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router";
 import { QueryClientContext } from "@tanstack/react-query";
+import { createPortal } from "react-dom";
 import { Clock, FileText, Pencil, Plus, Sparkles, Trash2 } from "lucide-react";
 import { trpc } from "../../trpc.js";
 import { useWsChannel } from "../../ws.js";
 import { MasterDetail } from "../../components/MasterDetail.js";
 import { RecordingStatusBadge } from "../../components/RecordingStatusBadge.js";
-import { useConfirm } from "../../hooks/useConfirm.js";
 import { useT } from "../../i18n/LanguageProvider.js";
 import "./recordings.css";
 
@@ -28,6 +28,10 @@ interface Row {
   depth?: number;
   indentLevel?: number;
 }
+
+type RecordingDialog =
+  | { kind: "rename"; row: Row; value: string }
+  | { kind: "delete"; row: Row };
 
 function fmtTs(iso: string | null): string {
   if (!iso) return "";
@@ -60,13 +64,14 @@ function rowDepth(row: Row): number {
 export function RecordingsList() {
   const { data, isPending } = trpc.recordings.list.useQuery({});
   const t = useT();
-  const confirm = useConfirm();
   const navigate = useNavigate();
   const location = useLocation();
   // Read the client off context directly (non-throwing) so the component can
   // render in isolation under just <MemoryRouter> in unit tests.
   const qc = useContext(QueryClientContext);
+  const menuRef = useRef<HTMLDivElement>(null);
   const [menu, setMenu] = useState<{ row: Row; x: number; y: number } | null>(null);
+  const [dialog, setDialog] = useState<RecordingDialog | null>(null);
 
   const invalidate = () => {
     qc?.invalidateQueries({ queryKey: [["recordings", "list"]] });
@@ -88,14 +93,17 @@ export function RecordingsList() {
   useEffect(() => {
     if (!menu) return;
     const close = () => setMenu(null);
+    const onPointerDown = (event: PointerEvent) => {
+      if (!menuRef.current?.contains(event.target as Node)) close();
+    };
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") close();
     };
-    window.addEventListener("click", close);
+    window.addEventListener("pointerdown", onPointerDown, true);
     window.addEventListener("scroll", close, true);
     window.addEventListener("keydown", onKey);
     return () => {
-      window.removeEventListener("click", close);
+      window.removeEventListener("pointerdown", onPointerDown, true);
       window.removeEventListener("scroll", close, true);
       window.removeEventListener("keydown", onKey);
     };
@@ -123,17 +131,27 @@ export function RecordingsList() {
 
   const renameRow = (row: Row) => {
     closeMenu();
-    const next = window.prompt(t("reader.title.rename"), row.title ?? row.stem);
-    if (next === null) return;
-    const title = next.trim();
-    if (!title || title === (row.title ?? "")) return;
-    renameMut.mutate({ stem: row.stem, title });
+    setDialog({ kind: "rename", row, value: row.title ?? row.stem });
+  };
+
+  const submitRename = () => {
+    if (dialog?.kind !== "rename") return;
+    const title = dialog.value.trim();
+    if (title && title !== (dialog.row.title ?? "")) {
+      renameMut.mutate({ stem: dialog.row.stem, title });
+    }
+    setDialog(null);
   };
 
   const deleteRow = (row: Row) => {
     closeMenu();
-    const label = row.title ?? row.stem;
-    if (!confirm(t("reader.delete.confirm", { label }))) return;
+    setDialog({ kind: "delete", row });
+  };
+
+  const confirmDelete = () => {
+    if (dialog?.kind !== "delete") return;
+    const row = dialog.row;
+    setDialog(null);
     deleteMut.mutate({ stem: row.stem }, {
       onSuccess: () => {
         if (location.pathname === `/inbox/${row.stem}`) navigate("/inbox", { replace: true });
@@ -206,15 +224,19 @@ export function RecordingsList() {
         })}
       </div>
       {menu && (
-        <div className="recording-context-menu" role="menu" style={menuStyle}>
-          <button type="button" role="menuitem" onClick={() => renameRow(menu.row)}>
+        <div ref={menuRef} className="recording-context-menu" role="menu" style={menuStyle}>
+          <button type="button" role="menuitem" onClick={(event) => {
+            event.stopPropagation();
+            renameRow(menu.row);
+          }}>
             <Pencil size={13} strokeWidth={1.8} />
             <span>{t("reader.context.rename")}</span>
           </button>
           <button
             type="button"
             role="menuitem"
-            onClick={() => {
+            onClick={(event) => {
+              event.stopPropagation();
               closeMenu();
               navigate(`/inbox/${menu.row.stem}`);
             }}
@@ -227,7 +249,10 @@ export function RecordingsList() {
             role="menuitem"
             className="danger"
             disabled={isDeleteBlocked(menu.row)}
-            onClick={() => deleteRow(menu.row)}
+            onClick={(event) => {
+              event.stopPropagation();
+              deleteRow(menu.row);
+            }}
           >
             <Trash2 size={13} strokeWidth={1.8} />
             <span>{t("reader.context.delete")}</span>
@@ -237,13 +262,68 @@ export function RecordingsList() {
     </>
   );
 
+  const dialogSlot = dialog?.kind === "rename" ? (
+    <div className="recording-action-dialog-backdrop" onMouseDown={(event) => {
+      if (event.target === event.currentTarget) setDialog(null);
+    }}>
+      <form
+        className="recording-action-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="recording-rename-title"
+        onSubmit={(event) => {
+          event.preventDefault();
+          submitRename();
+        }}
+      >
+        <h3 id="recording-rename-title">{t("reader.title.rename")}</h3>
+        <label>
+          <span>{t("reader.rename.label")}</span>
+          <input
+            autoFocus
+            value={dialog.value}
+            onChange={(event) => setDialog({ ...dialog, value: event.target.value })}
+          />
+        </label>
+        <div className="recording-action-dialog-actions">
+          <button type="button" onClick={() => setDialog(null)}>{t("reader.action.cancel")}</button>
+          <button type="submit" disabled={!dialog.value.trim()}>{t("reader.rename.save")}</button>
+        </div>
+      </form>
+    </div>
+  ) : dialog?.kind === "delete" ? (
+    <div className="recording-action-dialog-backdrop" onMouseDown={(event) => {
+      if (event.target === event.currentTarget) setDialog(null);
+    }}>
+      <section
+        className="recording-action-dialog"
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby="recording-delete-title"
+        aria-describedby="recording-delete-description"
+      >
+        <h3 id="recording-delete-title">{t("reader.context.delete")}</h3>
+        <p id="recording-delete-description">
+          {t("reader.delete.confirm", { label: dialog.row.title ?? dialog.row.stem })}
+        </p>
+        <div className="recording-action-dialog-actions">
+          <button type="button" onClick={() => setDialog(null)}>{t("reader.action.cancel")}</button>
+          <button type="button" className="danger" onClick={confirmDelete}>{t("reader.delete.action")}</button>
+        </div>
+      </section>
+    </div>
+  ) : null;
+
   return (
-    <MasterDetail
-      className="masterdetail--mobile-detail-focus masterdetail--inbox"
-      storageKey="yulu_ui.inbox.recordings.width"
-      listPending={isPending}
-      listSlot={listSlot}
-      detailSlot={<Outlet />}
-    />
+    <>
+      <MasterDetail
+        className="masterdetail--mobile-detail-focus masterdetail--inbox"
+        storageKey="yulu_ui.inbox.recordings.width"
+        listPending={isPending}
+        listSlot={listSlot}
+        detailSlot={<Outlet />}
+      />
+      {dialogSlot && createPortal(dialogSlot, document.body)}
+    </>
   );
 }
