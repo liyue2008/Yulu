@@ -50,7 +50,7 @@ LARK_RTC_LOG_DIRS = (
     Path.home() / "Library/Application Support/Feishu/sdk_storage/log/native-pc-sdk/rtc-sdk",
 )
 LARK_RTC_LOG_FRESHNESS_SEC = 15
-LARK_RTC_LOG_SCAN_BYTES = 1024 * 1024
+LARK_RTC_LOG_SCAN_BYTES = 4 * 1024 * 1024
 
 DEFAULT_CONFIG = {
     "enabled": True,
@@ -403,13 +403,7 @@ def _lark_local_rtc_is_joined(meeting_id, now=None):
     return False
 
 
-def _detect_lark_cli_meeting(cfg):
-    enabled = cfg.get("lark_cli_active_meeting")
-    if type(enabled) is not bool or not enabled:
-        return None
-    executable = _lark_cli_executable()
-    if not executable:
-        return None
+def _lark_cli_active_meetings(executable):
     payload = _run_lark_cli_json([
         executable,
         "vc",
@@ -422,6 +416,31 @@ def _detect_lark_cli_meeting(cfg):
     data = payload.get("data") if isinstance(payload, dict) else None
     meetings = data.get("meetings") if isinstance(data, dict) else None
     if not isinstance(meetings, list):
+        return None
+    return [meeting for meeting in meetings if isinstance(meeting, dict)]
+
+
+def _lark_meeting_has_ended(meeting_id):
+    executable = _lark_cli_executable()
+    if not executable:
+        return None
+    meetings = _lark_cli_active_meetings(executable)
+    if meetings is None:
+        return None
+    if any(str(meeting.get("meeting_id", "")).strip() == meeting_id for meeting in meetings):
+        return False
+    return not _lark_local_rtc_is_joined(meeting_id)
+
+
+def _detect_lark_cli_meeting(cfg):
+    enabled = cfg.get("lark_cli_active_meeting")
+    if type(enabled) is not bool or not enabled:
+        return None
+    executable = _lark_cli_executable()
+    if not executable:
+        return None
+    meetings = _lark_cli_active_meetings(executable)
+    if meetings is None:
         return None
     for meeting in meetings:
         if not isinstance(meeting, dict):
@@ -441,6 +460,7 @@ def _detect_lark_cli_meeting(cfg):
             "window": "",
             "signature": signature("Lark", meeting_id),
             "fallback": "lark_cli",
+            "source_meeting_id": meeting_id,
         }
     return None
 
@@ -773,6 +793,15 @@ def handle_auto_recording_lifecycle(cfg, result, state, now):
             marker.pop("missing_since", None)
             save_state(state)
         return False
+    source = marker.get("source")
+    source_meeting_id = marker.get("source_meeting_id")
+    if source == "lark_cli" and isinstance(source_meeting_id, str) and source_meeting_id:
+        ended = _lark_meeting_has_ended(source_meeting_id)
+        if not ended:
+            if "missing_since" in marker:
+                marker.pop("missing_since", None)
+                save_state(state)
+            return False
     if not recording_matches:
         state.pop("auto_recording", None)
         save_state(state)
@@ -893,6 +922,8 @@ def run_daemon(args):
                     "audio_path": started_recording.get("audio_path")
                         or started_recording.get("file_path")
                         or "",
+                    "source": res.get("fallback") or "generic",
+                    "source_meeting_id": res.get("source_meeting_id") or "",
                 }
                 save_state(state)
             log(f"🔔 {dispatch} recording: {title}")

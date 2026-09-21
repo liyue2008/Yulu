@@ -59,6 +59,7 @@ def test_meeting_detector_uses_active_lark_cli_meeting_without_accessibility() -
         "window": "",
         "signature": meeting_detector.signature("Lark", "7687635521951452927"),
         "fallback": "lark_cli",
+        "source_meeting_id": "7687635521951452927",
     }
     assert run.call_args.args[0] == [
         command,
@@ -159,6 +160,36 @@ def test_lark_local_rtc_requires_a_fresh_log_for_the_same_meeting(tmp_path) -> N
             "7687635521951452927",
             now=116.0,
         ) is False
+
+
+def test_lark_end_requires_both_api_absence_and_local_rtc_absence() -> None:
+    command = "/Users/test/.npm-global/bin/lark-cli"
+    meeting_id = "7687635521951452927"
+    with patch.object(meeting_detector, "_lark_cli_executable", return_value=command):
+        with (
+            patch.object(
+                meeting_detector,
+                "_lark_cli_active_meetings",
+                return_value=[{"meeting_id": meeting_id}],
+            ),
+            patch.object(meeting_detector, "_lark_local_rtc_is_joined", return_value=False),
+        ):
+            assert meeting_detector._lark_meeting_has_ended(meeting_id) is False
+
+        with (
+            patch.object(meeting_detector, "_lark_cli_active_meetings", return_value=[]),
+            patch.object(meeting_detector, "_lark_local_rtc_is_joined", return_value=True),
+        ):
+            assert meeting_detector._lark_meeting_has_ended(meeting_id) is False
+
+        with (
+            patch.object(meeting_detector, "_lark_cli_active_meetings", return_value=[]),
+            patch.object(meeting_detector, "_lark_local_rtc_is_joined", return_value=False),
+        ):
+            assert meeting_detector._lark_meeting_has_ended(meeting_id) is True
+
+        with patch.object(meeting_detector, "_lark_cli_active_meetings", return_value=None):
+            assert meeting_detector._lark_meeting_has_ended(meeting_id) is None
 
 
 def test_lark_cli_participant_snapshot_requires_current_user_status_in_meeting() -> None:
@@ -374,6 +405,62 @@ def test_auto_recording_stops_after_the_same_meeting_disappears() -> None:
     stop.assert_called_once_with(meeting_id, "/recordings/lark.wav")
     assert "auto_recording" not in state
     assert saved
+
+
+def test_lark_auto_stop_ignores_transient_start_detection_failure_while_meeting_is_live() -> None:
+    marker = {
+        "meeting_id": "detected::lark-signature",
+        "signature": "lark-signature",
+        "started_at": 50.0,
+        "audio_path": "/recordings/lark.wav",
+        "source": "lark_cli",
+        "source_meeting_id": "7687955398859247333",
+        "missing_since": 90.0,
+    }
+    state = {"auto_recording": marker}
+    with (
+        patch.object(meeting_detector, "_recording_matches", return_value=True),
+        patch.object(meeting_detector, "_lark_meeting_has_ended", return_value=False),
+        patch.object(meeting_detector, "stop_detected_recording") as stop,
+        patch.object(meeting_detector, "save_state") as save,
+    ):
+        assert meeting_detector.handle_auto_recording_lifecycle(
+            meeting_detector.DEFAULT_CONFIG,
+            {"active": False},
+            state,
+            200.0,
+        ) is False
+
+    assert "missing_since" not in marker
+    stop.assert_not_called()
+    save.assert_called_once()
+
+
+def test_lark_auto_stop_ignores_unknown_end_state() -> None:
+    marker = {
+        "meeting_id": "detected::lark-signature",
+        "signature": "lark-signature",
+        "started_at": 50.0,
+        "audio_path": "/recordings/lark.wav",
+        "source": "lark_cli",
+        "source_meeting_id": "7687955398859247333",
+    }
+    state = {"auto_recording": marker}
+    with (
+        patch.object(meeting_detector, "_recording_matches", return_value=True),
+        patch.object(meeting_detector, "_lark_meeting_has_ended", return_value=None),
+        patch.object(meeting_detector, "stop_detected_recording") as stop,
+        patch.object(meeting_detector, "save_state"),
+    ):
+        assert meeting_detector.handle_auto_recording_lifecycle(
+            meeting_detector.DEFAULT_CONFIG,
+            {"active": False},
+            state,
+            200.0,
+        ) is False
+
+    assert "missing_since" not in marker
+    stop.assert_not_called()
 
 
 def test_auto_stop_never_stops_a_different_or_manual_recording() -> None:
