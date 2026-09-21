@@ -223,7 +223,29 @@ def save_state(state):
     STATE_PATH.write_text(json.dumps(state, indent=2, ensure_ascii=False))
 
 
+def _capture_status():
+    try:
+        from record_audio import _capture_controller
+        status = _capture_controller().status()
+    except Exception:
+        return {}
+    return status if isinstance(status, dict) else {}
+
+
+def _same_audio_path(left, right):
+    if not left or not right:
+        return False
+    try:
+        return Path(str(left)).expanduser().resolve() == Path(str(right)).expanduser().resolve()
+    except (OSError, RuntimeError):
+        return False
+
+
 def is_recording_active():
+    capture = _capture_status()
+    recording = capture.get("recording")
+    if type(recording) is bool:
+        return recording
     try:
         state = load_recording_state(RECORDING_STATE_PATH)
         if state_recording_active(state):
@@ -649,30 +671,69 @@ def detected_meeting_id(result):
     return f"detected::{detected_signature}" if detected_signature else ""
 
 
+def _recording_matches(meeting_id, audio_path=""):
+    try:
+        current = recording_info(load_recording_state(RECORDING_STATE_PATH))
+    except Exception:
+        current = None
+    capture = _capture_status()
+    recording = capture.get("recording")
+    if type(recording) is bool:
+        if not recording:
+            return False
+        live_path = capture.get("file") or ""
+        if audio_path and live_path and not _same_audio_path(audio_path, live_path):
+            return False
+        if current and current.get("meeting_id") == meeting_id:
+            return True
+        return bool(audio_path and _same_audio_path(audio_path, live_path))
+    return bool(current and current.get("meeting_id") == meeting_id)
+
+
+def _detected_recording_info(meeting_id):
+    try:
+        current = recording_info(load_recording_state(RECORDING_STATE_PATH))
+    except Exception:
+        return None
+    if not current or current.get("meeting_id") != meeting_id:
+        return None
+    audio_path = current.get("audio_path") or current.get("file_path") or ""
+    if not audio_path or not _recording_matches(meeting_id, audio_path):
+        return None
+    return current
+
+
+def _start_detected_recording(title, meeting_id):
+    daemon = SCRIPT_DIR / "meeting_daemon.py"
+    with suppress(OSError, subprocess.TimeoutExpired):
+        subprocess.run(
+            [sys.executable, str(daemon), "start", title, meeting_id],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=45,
+        )
+    return _detected_recording_info(meeting_id)
+
+
 def dispatch_recording(cfg, result, title):
     auto_patterns = _compile_patterns(cfg.get("auto_record_apps", []))
     app = str(result.get("app", ""))
     meeting_id = detected_meeting_id(result)
     if meeting_id and auto_patterns and any(pattern.search(app) for pattern in auto_patterns):
-        _launch_recording_command(["start", title, meeting_id])
-        return "automatic"
+        started = _start_detected_recording(title, meeting_id)
+        return ("automatic", started) if started else ("failed", None)
     prompt_recording(title)
-    return "prompt"
+    return "prompt", None
 
 
-def _recording_matches(meeting_id):
-    try:
-        current = recording_info(load_recording_state(RECORDING_STATE_PATH))
-    except Exception:
-        return False
-    return bool(current and current.get("meeting_id") == meeting_id)
-
-
-def stop_detected_recording(meeting_id):
+def stop_detected_recording(meeting_id, audio_path=""):
     daemon = SCRIPT_DIR / "meeting_daemon.py"
+    arguments = [sys.executable, str(daemon), "stop_detected", meeting_id]
+    if audio_path:
+        arguments.append(str(audio_path))
     try:
         result = subprocess.run(
-            [sys.executable, str(daemon), "stop_detected", meeting_id],
+            arguments,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             timeout=30,
@@ -692,7 +753,9 @@ def handle_auto_recording_lifecycle(cfg, result, state, now):
         state.pop("auto_recording", None)
         save_state(state)
         return False
-    recording_matches = _recording_matches(meeting_id)
+    audio_path = marker.get("audio_path")
+    expected_audio_path = str(audio_path).strip() if isinstance(audio_path, str) else ""
+    recording_matches = _recording_matches(meeting_id, expected_audio_path)
     if result.get("active") and result.get("signature") == detected_signature:
         started_at = marker.get("started_at")
         try:
@@ -733,7 +796,7 @@ def handle_auto_recording_lifecycle(cfg, result, state, now):
         return False
     if missing_seconds < grace_seconds:
         return False
-    if not stop_detected_recording(meeting_id):
+    if not stop_detected_recording(meeting_id, expected_audio_path):
         return False
     state.pop("auto_recording", None)
     save_state(state)
@@ -821,12 +884,15 @@ def run_daemon(args):
 
             title = recording_title(res)
             mark_prompted(state, sig)
-            dispatch = dispatch_recording(cfg, res, title)
-            if dispatch == "automatic":
+            dispatch, started_recording = dispatch_recording(cfg, res, title)
+            if dispatch == "automatic" and started_recording:
                 state["auto_recording"] = {
                     "meeting_id": detected_meeting_id(res),
                     "signature": sig,
                     "started_at": now,
+                    "audio_path": started_recording.get("audio_path")
+                        or started_recording.get("file_path")
+                        or "",
                 }
                 save_state(state)
             log(f"🔔 {dispatch} recording: {title}")

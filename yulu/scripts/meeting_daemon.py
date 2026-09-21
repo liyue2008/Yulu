@@ -805,18 +805,40 @@ def cmd_auto_stop(event_id=None):
         print(f"⏭ 继续录制，{end_at.strftime('%H:%M')} 再次询问")
 
 
+def _same_audio_path(left, right):
+    if not left or not right:
+        return False
+    try:
+        return Path(str(left)).expanduser().resolve() == Path(str(right)).expanduser().resolve()
+    except (OSError, RuntimeError):
+        return False
+
+
 def cmd_stop_detected(args):
     expected_meeting_id = args[0] if args else ""
+    expected_audio_path = args[1] if len(args) > 1 else ""
     if not expected_meeting_id.startswith("detected::"):
         print("忽略无效的 detector 停止请求")
-        return
-    current = recording_info(load_state())
-    if not current or current.get("meeting_id") != expected_meeting_id:
+        return False
+    current = _active_recording_info()
+    owns_recording = bool(
+        current
+        and (
+            current.get("meeting_id") == expected_meeting_id
+            or (
+                expected_audio_path
+                and _same_audio_path(
+                    expected_audio_path,
+                    current.get("audio_path") or current.get("file_path"),
+                )
+            )
+        )
+    )
+    if not owns_recording:
         print("录音不属于当前 detector 会议，忽略自动停止")
-        return
+        return False
     print(f"⏹️ detector 自动停止录制: {expected_meeting_id}")
-    if not _stop_and_process(stop_reason="automatic"):
-        raise SystemExit(1)
+    return _stop_and_process(stop_reason="automatic")
 
 
 def cmd_stop():
@@ -827,18 +849,23 @@ def cmd_stop():
 
 def _active_recording_info():
     rec = recording_info(load_state())
-    if rec:
-        return rec
     try:
         from record_audio import _capture_controller
         resp = _capture_controller().status()
     except Exception:
         resp = None
     recording = resp.get("recording") if isinstance(resp, dict) else None
-    if type(recording) is not bool or not recording:
+    if type(recording) is not bool:
+        return rec or {}
+    if not recording:
         return {}
     assert isinstance(resp, dict)
     audio_path = resp.get("file") or ""
+    if rec and (
+        not audio_path
+        or _same_audio_path(audio_path, rec.get("audio_path") or rec.get("file_path"))
+    ):
+        return rec
     title = Path(audio_path).stem if audio_path else "meeting"
     return {
         "title": title,
@@ -976,10 +1003,10 @@ def main():
     args = sys.argv[2:]
     handlers = {
         "schedule": lambda: cmd_schedule(),
-        "start": lambda: _start_recording(
+        "start": lambda: sys.exit(0 if _start_recording(
             args[0] if args else "未命名会议",
             args[1] if len(args) > 1 else "",
-        ),
+        ) else 2),
         "start_meeting": lambda: cmd_start_meeting(args),
         "current_meeting": lambda: cmd_current_meeting(),
         "prompt_action": lambda: cmd_prompt_action(args),
@@ -990,7 +1017,7 @@ def main():
         "ask_record": lambda: cmd_ask_record(args),
         "auto_stop": lambda: cmd_auto_stop(args[0] if args else None),
         "stop": lambda: cmd_stop(),
-        "stop_detected": lambda: cmd_stop_detected(args),
+        "stop_detected": lambda: sys.exit(0 if cmd_stop_detected(args) else 2),
         "detect": lambda: subprocess.run([
             sys.executable,
             str(SCRIPT_DIR / "meeting_detector.py"),
