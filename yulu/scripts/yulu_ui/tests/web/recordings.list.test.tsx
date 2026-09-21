@@ -1,6 +1,6 @@
 import { beforeEach, describe, it, expect, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
-import { MemoryRouter } from "react-router";
+import { MemoryRouter, useLocation } from "react-router";
 
 const listMock = vi.fn();
 const renameMutate = vi.fn();
@@ -17,9 +17,12 @@ vi.mock("../../web/src/trpc.js", () => ({
   },
 }));
 vi.mock("../../web/src/ws.js", () => ({ useWsChannel: () => {} }));
-vi.mock("../../web/src/hooks/useConfirm.js", () => ({ useConfirm: () => vi.fn(() => true) }));
 
 import { RecordingsList } from "../../web/src/routes/inbox/recordings";
+
+function LocationProbe() {
+  return <output data-testid="location">{useLocation().pathname}</output>;
+}
 
 function rows() {
   return [
@@ -93,6 +96,52 @@ describe("RecordingsList", () => {
     expect(screen.getByRole("menuitem", { name: /转录、总结与分享/i })).toBeInTheDocument();
     expect(screen.queryByRole("menuitem", { name: /发送 Notion/i })).toBeNull();
     expect(reprocessMutate).not.toHaveBeenCalled();
+  });
+
+  it("opens the rename dialog and submits the new title", () => {
+    listMock.mockReturnValue({ data: rows(), isPending: false });
+    render(<MemoryRouter><RecordingsList /></MemoryRouter>);
+
+    fireEvent.contextMenu(screen.getByText("TeamSync"));
+    fireEvent.click(screen.getByRole("menuitem", { name: /重命名/i }));
+    const input = screen.getByRole("textbox", { name: "录音标题" });
+    fireEvent.change(input, { target: { value: "Weekly sync" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+
+    expect(renameMutate).toHaveBeenCalledWith({
+      stem: "TeamSync_20260102_090000",
+      title: "Weekly sync",
+    });
+  });
+
+  it("opens the atomic actions view", () => {
+    listMock.mockReturnValue({ data: rows(), isPending: false });
+    render(
+      <MemoryRouter initialEntries={["/inbox"]}>
+        <RecordingsList />
+        <LocationProbe />
+      </MemoryRouter>,
+    );
+
+    fireEvent.contextMenu(screen.getByText("TeamSync"));
+    fireEvent.click(screen.getByRole("menuitem", { name: /转录、总结与分享/i }));
+
+    expect(screen.getByTestId("location")).toHaveTextContent("/inbox/TeamSync_20260102_090000");
+  });
+
+  it("opens an in-app confirmation before deleting", () => {
+    listMock.mockReturnValue({ data: rows(), isPending: false });
+    render(<MemoryRouter><RecordingsList /></MemoryRouter>);
+
+    fireEvent.contextMenu(screen.getByText("TeamSync"));
+    fireEvent.click(screen.getByRole("menuitem", { name: /删除/i }));
+    expect(screen.getByRole("alertdialog")).toHaveTextContent("TeamSync");
+    fireEvent.click(screen.getByRole("button", { name: "确认删除" }));
+
+    expect(deleteMutate).toHaveBeenCalledWith(
+      { stem: "TeamSync_20260102_090000" },
+      expect.objectContaining({ onSuccess: expect.any(Function) }),
+    );
   });
 
   it("keeps the atomic-actions entry available while protecting deletion during an active task", () => {

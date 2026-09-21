@@ -192,6 +192,73 @@
 .recording-context-menu button:hover { background: var(--row-hover); }
 .recording-context-menu button.danger { color: var(--red); }
 .recording-context-menu button:disabled { opacity: 0.45; cursor: not-allowed; }
+.recording-action-dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.34);
+}
+.recording-action-dialog {
+  width: min(400px, calc(100vw - 48px));
+  padding: 20px;
+  border: 1px solid var(--edge-card);
+  border-radius: var(--radius-card);
+  background: var(--wp-1);
+  box-shadow: 0 24px 64px -20px rgba(0, 0, 0, 0.4), var(--edge-shadow);
+}
+.recording-action-dialog h3 {
+  margin: 0 0 14px;
+  color: var(--fg);
+  font-size: 16px;
+}
+.recording-action-dialog p {
+  margin: 0 0 18px;
+  color: var(--fg-2);
+  line-height: 1.55;
+}
+.recording-action-dialog label {
+  display: grid;
+  gap: 7px;
+  color: var(--fg-2);
+  font-size: 12px;
+}
+.recording-action-dialog input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 9px 11px;
+  border: 1px solid var(--edge-card);
+  border-radius: 9px;
+  background: var(--wp-2);
+  color: var(--fg);
+  font: inherit;
+}
+.recording-action-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 18px;
+}
+.recording-action-dialog-actions button {
+  padding: 8px 13px;
+  border: 1px solid var(--edge-card);
+  border-radius: 9px;
+  background: var(--wp-2);
+  color: var(--fg);
+  cursor: pointer;
+}
+.recording-action-dialog-actions button[type="submit"] {
+  border-color: color-mix(in oklch, var(--accent) 42%, var(--edge-card));
+  background: var(--accent-soft);
+  color: var(--accent-on, var(--accent));
+}
+.recording-action-dialog-actions button.danger {
+  border-color: color-mix(in oklch, var(--red) 40%, var(--edge-card));
+  color: var(--red);
+}
+.recording-action-dialog-actions button:disabled { opacity: 0.45; cursor: not-allowed; }
 @media (max-width: 760px) {
   .recording-row {
     padding: 10px 40px 10px calc(10px + var(--recording-indent));
