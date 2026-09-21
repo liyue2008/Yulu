@@ -1,0 +1,15 @@
+yulu/scripts/meeting_detector.py
+  ai_agent 226-243,245-248,674-717,723-724,726,729,731-733,736,756-758,799,887-888,893-895
+yulu/scripts/meeting_daemon.py
+  ai_agent 808-816,819,822-837,839,841,858-860,864-868,1006,1009,1020
+tests/test_meeting_detector_processes.py
+  ai_agent 267,269-273,275-279,283,289-290,292-339,350,374
+tests/test_meeting_daemon_stop.py
+  ai_agent 356,359-388,458-471
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.4",
+  "base_commit_sha": "cc04d3d20e8f56adbcc355689cb67f5d36671d66",
+  "prompts": {}
+}
