@@ -1,0 +1,11 @@
+yulu/scripts/meeting_detector.py
+  ai_agent 541-547,723
+tests/test_meeting_detector_processes.py
+  ai_agent 72-82
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.4",
+  "base_commit_sha": "0b01d40db1ced4e8c6432b96a602b73f5707e47b",
+  "prompts": {}
+}
