@@ -264,31 +264,79 @@ def test_lark_main_process_alone_does_not_look_like_a_meeting() -> None:
     assert result["active"] is False
 
 
-def test_lark_auto_record_dispatches_start_without_a_prompt() -> None:
+def test_lark_auto_record_dispatches_only_after_confirmed_start() -> None:
     config = {**meeting_detector.DEFAULT_CONFIG, "auto_record_apps": ["Lark"]}
-    calls = []
+    detected_signature = meeting_detector.signature("Lark", "meeting-process")
+    recording = {
+        "meeting_id": f"detected::{detected_signature}",
+        "audio_path": "/recordings/lark.wav",
+    }
     with patch.object(
-        meeting_detector.subprocess,
-        "Popen",
-        side_effect=lambda arguments, **options: calls.append((arguments, options)),
-    ):
-        mode = meeting_detector.dispatch_recording(
+        meeting_detector,
+        "_start_detected_recording",
+        return_value=recording,
+    ) as start:
+        mode, started = meeting_detector.dispatch_recording(
             config,
             {
                 "app": "Lark",
-                "signature": meeting_detector.signature("Lark", "meeting-process"),
+                "signature": detected_signature,
             },
             "检测到会议：Lark Meeting",
         )
 
     assert mode == "automatic"
-    assert calls[0][0] == [
-        meeting_detector.sys.executable,
-        str(meeting_detector.SCRIPT_DIR / "meeting_daemon.py"),
-        "start",
+    assert started == recording
+    start.assert_called_once_with(
         "检测到会议：Lark Meeting",
-        f"detected::{meeting_detector.signature('Lark', 'meeting-process')}",
-    ]
+        f"detected::{detected_signature}",
+    )
+
+
+def test_lark_auto_record_does_not_claim_a_failed_or_busy_start() -> None:
+    config = {**meeting_detector.DEFAULT_CONFIG, "auto_record_apps": ["Lark"]}
+    detected_signature = meeting_detector.signature("Lark", "meeting-process")
+    with patch.object(meeting_detector, "_start_detected_recording", return_value=None):
+        mode, started = meeting_detector.dispatch_recording(
+            config,
+            {"app": "Lark", "signature": detected_signature},
+            "Lark Meeting",
+        )
+
+    assert mode == "failed"
+    assert started is None
+
+
+def test_recording_activity_uses_capture_daemon_as_the_source_of_truth(monkeypatch) -> None:
+    monkeypatch.setattr(meeting_detector, "_capture_status", lambda: {
+        "recording": True,
+        "file": "/recordings/live.wav",
+    })
+    monkeypatch.setattr(meeting_detector, "load_recording_state", lambda _path: {
+        "recording": False,
+    })
+    monkeypatch.setattr(meeting_detector.Path, "exists", lambda _path: False)
+
+    assert meeting_detector.is_recording_active() is True
+
+
+def test_recording_ownership_survives_stale_state_with_exact_capture_path(monkeypatch) -> None:
+    monkeypatch.setattr(meeting_detector, "_capture_status", lambda: {
+        "recording": True,
+        "file": "/recordings/detected.wav",
+    })
+    monkeypatch.setattr(meeting_detector, "load_recording_state", lambda _path: {
+        "recording": False,
+    })
+
+    assert meeting_detector._recording_matches(
+        "detected::current",
+        "/recordings/detected.wav",
+    ) is True
+    assert meeting_detector._recording_matches(
+        "detected::current",
+        "/recordings/manual.wav",
+    ) is False
 
 
 def test_auto_recording_stops_after_the_same_meeting_disappears() -> None:
@@ -299,6 +347,7 @@ def test_auto_recording_stops_after_the_same_meeting_disappears() -> None:
             "meeting_id": meeting_id,
             "signature": "lark-signature",
             "started_at": 50.0,
+            "audio_path": "/recordings/lark.wav",
         },
     }
     saved = []
@@ -322,7 +371,7 @@ def test_auto_recording_stops_after_the_same_meeting_disappears() -> None:
             109.0,
         ) is True
 
-    stop.assert_called_once_with(meeting_id)
+    stop.assert_called_once_with(meeting_id, "/recordings/lark.wav")
     assert "auto_recording" not in state
     assert saved
 

@@ -353,10 +353,39 @@ def test_detector_stop_is_bound_to_the_same_automatic_recording(monkeypatch):
         lambda stop_reason="manual": reasons.append(stop_reason) or True,
     )
 
-    meeting_daemon.cmd_stop_detected(["detected::stale"])
+    assert meeting_daemon.cmd_stop_detected(["detected::stale"]) is False
     assert reasons == []
 
-    meeting_daemon.cmd_stop_detected(["detected::current"])
+    assert meeting_daemon.cmd_stop_detected(["detected::current"]) is True
+    assert reasons == ["automatic"]
+
+
+def test_detector_stop_recovers_ownership_from_exact_live_capture_path(monkeypatch, tmp_path):
+    import meeting_daemon
+
+    audio = tmp_path / "detected.wav"
+    reasons = []
+    monkeypatch.setattr(meeting_daemon, "_active_recording_info", lambda: {
+        "audio_path": str(audio),
+        "file_path": str(audio),
+        "meeting_id": "",
+    })
+    monkeypatch.setattr(
+        meeting_daemon,
+        "_stop_and_process",
+        lambda stop_reason="manual": reasons.append(stop_reason) or True,
+    )
+
+    assert meeting_daemon.cmd_stop_detected([
+        "detected::current",
+        str(tmp_path / "different.wav"),
+    ]) is False
+    assert reasons == []
+
+    assert meeting_daemon.cmd_stop_detected([
+        "detected::current",
+        str(audio),
+    ]) is True
     assert reasons == ["automatic"]
 
 
@@ -424,6 +453,22 @@ def test_status_window_detaches_from_parent_session(monkeypatch, tmp_path, bundl
     assert seen["kwargs"]["stdin"] is meeting_daemon.subprocess.DEVNULL
     assert seen["kwargs"]["start_new_session"] is True
     assert json.loads(state_path.read_text(encoding="utf-8"))["_status_pid"] == 12345
+
+
+def test_start_command_reports_failure_to_detector(monkeypatch):
+    import meeting_daemon
+
+    monkeypatch.setattr(
+        meeting_daemon.sys,
+        "argv",
+        ["meeting_daemon.py", "start", "Team Sync", "detected::sync"],
+    )
+    monkeypatch.setattr(meeting_daemon, "_start_recording", lambda *_args: False)
+
+    with pytest.raises(SystemExit) as failure:
+        meeting_daemon.main()
+
+    assert failure.value.code == 2
 
 
 def test_start_recording_uses_capture_controller(monkeypatch, tmp_path):
