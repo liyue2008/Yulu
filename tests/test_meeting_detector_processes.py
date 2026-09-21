@@ -39,6 +39,8 @@ def test_meeting_detector_uses_active_lark_cli_meeting_without_accessibility() -
     }
     with (
         patch.object(meeting_detector, "_lark_cli_executable", return_value=command),
+        patch.object(meeting_detector, "_lark_cli_current_user_is_joined", return_value=True),
+        patch.object(meeting_detector, "_lark_local_rtc_is_joined", return_value=True),
         patch.object(
             meeting_detector.subprocess,
             "run",
@@ -67,6 +69,146 @@ def test_meeting_detector_uses_active_lark_cli_meeting_without_accessibility() -
         "--format",
         "json",
     ]
+
+
+def test_lark_cli_active_schedule_without_current_user_join_is_ignored() -> None:
+    config = {
+        **meeting_detector.DEFAULT_CONFIG,
+        "lark_cli_active_meeting": True,
+    }
+    command = "/Users/test/.npm-global/bin/lark-cli"
+    payload = {
+        "ok": True,
+        "data": {
+            "meetings": [{
+                "meeting_id": "7687635521951452927",
+                "meeting_title": "Design review",
+            }],
+        },
+    }
+    with (
+        patch.object(meeting_detector, "_lark_cli_executable", return_value=command),
+        patch.object(meeting_detector, "_lark_cli_current_user_is_joined", return_value=False),
+        patch.object(
+            meeting_detector.subprocess,
+            "run",
+            return_value=SimpleNamespace(
+                returncode=0,
+                stdout=meeting_detector.json.dumps(payload),
+            ),
+        ),
+    ):
+        result = meeting_detector._detect_lark_cli_meeting(config)
+
+    assert result is None
+
+
+def test_lark_cli_server_participant_without_local_rtc_session_is_ignored() -> None:
+    config = {
+        **meeting_detector.DEFAULT_CONFIG,
+        "lark_cli_active_meeting": True,
+    }
+    command = "/Users/test/.npm-global/bin/lark-cli"
+    payload = {
+        "ok": True,
+        "data": {
+            "meetings": [{
+                "meeting_id": "7687635521951452927",
+                "meeting_title": "Design review",
+            }],
+        },
+    }
+    with (
+        patch.object(meeting_detector, "_lark_cli_executable", return_value=command),
+        patch.object(meeting_detector, "_lark_cli_current_user_is_joined", return_value=True),
+        patch.object(meeting_detector, "_lark_local_rtc_is_joined", return_value=False),
+        patch.object(
+            meeting_detector.subprocess,
+            "run",
+            return_value=SimpleNamespace(
+                returncode=0,
+                stdout=meeting_detector.json.dumps(payload),
+            ),
+        ),
+    ):
+        result = meeting_detector._detect_lark_cli_meeting(config)
+
+    assert result is None
+
+
+def test_lark_local_rtc_requires_a_fresh_log_for_the_same_meeting(tmp_path) -> None:
+    log_dir = tmp_path / "rtc-sdk"
+    log_dir.mkdir()
+    log = log_dir / "2026-09-21_100538_rtclog.log"
+    log.write_text(
+        "OnAudioFramePlayStateChanged room_id:7687635521951452927 state:played\n",
+        encoding="utf-8",
+    )
+    meeting_detector.os.utime(log, (100.0, 100.0))
+
+    with patch.object(meeting_detector, "LARK_RTC_LOG_DIRS", (log_dir,)):
+        assert meeting_detector._lark_local_rtc_is_joined(
+            "7687635521951452927",
+            now=110.0,
+        ) is True
+        assert meeting_detector._lark_local_rtc_is_joined(
+            "different-meeting",
+            now=110.0,
+        ) is False
+        assert meeting_detector._lark_local_rtc_is_joined(
+            "7687635521951452927",
+            now=116.0,
+        ) is False
+
+
+def test_lark_cli_participant_snapshot_requires_current_user_status_in_meeting() -> None:
+    command = "/Users/test/.npm-global/bin/lark-cli"
+    open_id = "ou_current_user"
+
+    def is_joined(status):
+        payload = {
+            "ok": True,
+            "data": {
+                "meeting": {
+                    "participants": [{
+                        "id": open_id,
+                        "status": status,
+                    }],
+                },
+            },
+        }
+        with (
+            patch.object(meeting_detector, "_lark_cli_user_open_id", return_value=open_id),
+            patch.object(
+                meeting_detector.subprocess,
+                "run",
+                return_value=SimpleNamespace(
+                    returncode=0,
+                    stdout=meeting_detector.json.dumps(payload),
+                ),
+            ) as run,
+        ):
+            joined = meeting_detector._lark_cli_current_user_is_joined(command, "meeting-1")
+        assert run.call_args.args[0] == [
+            command,
+            "vc",
+            "meeting",
+            "get",
+            "--as",
+            "user",
+            "--meeting-id",
+            "meeting-1",
+            "--with-participants",
+            "--user-id-type",
+            "open_id",
+            "--format",
+            "json",
+        ]
+        return joined
+
+    assert is_joined(2) is True
+    assert is_joined(4) is False
+    assert is_joined("4") is False
 
 
 def test_lark_cli_recording_uses_the_exact_meeting_title() -> None:

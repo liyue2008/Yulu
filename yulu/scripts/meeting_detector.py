@@ -43,6 +43,14 @@ RECORDING_STATE_PATH = CONFIG_DIR / ".state.json"
 PID_PATH = IPC_DIR / ".detector.pid"
 LOG_PATH = LOGS_DIR / "detector.log"
 SCRIPT_DIR = Path(__file__).resolve().parent
+_LARK_CLI_USER_OPEN_IDS = {}
+LARK_RTC_LOG_DIRS = (
+    Path.home() / "Library/Application Support/LarkInternational/sdk_storage/log/native-pc-sdk/rtc-sdk",
+    Path.home() / "Library/Application Support/Lark/sdk_storage/log/native-pc-sdk/rtc-sdk",
+    Path.home() / "Library/Application Support/Feishu/sdk_storage/log/native-pc-sdk/rtc-sdk",
+)
+LARK_RTC_LOG_FRESHNESS_SEC = 15
+LARK_RTC_LOG_SCAN_BYTES = 1024 * 1024
 
 DEFAULT_CONFIG = {
     "enabled": True,
@@ -273,6 +281,106 @@ def _lark_cli_executable():
     return None
 
 
+def _run_lark_cli_json(arguments, timeout=8):
+    try:
+        result = subprocess.run(
+            arguments,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    stdout = result.stdout if isinstance(result.stdout, str) else ""
+    if result.returncode != 0 or len(stdout.encode("utf-8")) > 1024 * 1024:
+        return None
+    try:
+        payload = json.loads(stdout)
+    except json.JSONDecodeError:
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _lark_cli_user_open_id(executable):
+    cached = _LARK_CLI_USER_OPEN_IDS.get(executable)
+    if cached:
+        return cached
+    payload = _run_lark_cli_json([executable, "auth", "status"])
+    identities = payload.get("identities") if isinstance(payload, dict) else None
+    user = identities.get("user") if isinstance(identities, dict) else None
+    open_id = str(user.get("openId", "")).strip() if isinstance(user, dict) else ""
+    if open_id:
+        _LARK_CLI_USER_OPEN_IDS[executable] = open_id
+    return open_id or None
+
+
+def _lark_cli_current_user_is_joined(executable, meeting_id):
+    open_id = _lark_cli_user_open_id(executable)
+    if not open_id:
+        return False
+    payload = _run_lark_cli_json([
+        executable,
+        "vc",
+        "meeting",
+        "get",
+        "--as",
+        "user",
+        "--meeting-id",
+        meeting_id,
+        "--with-participants",
+        "--user-id-type",
+        "open_id",
+        "--format",
+        "json",
+    ])
+    data = payload.get("data") if isinstance(payload, dict) else None
+    meeting = data.get("meeting") if isinstance(data, dict) else None
+    participants = meeting.get("participants") if isinstance(meeting, dict) else None
+    if not isinstance(participants, list):
+        return False
+    return any(
+        isinstance(participant, dict)
+        and str(participant.get("id", "")).strip() == open_id
+        and str(participant.get("status", "")).strip() == "2"
+        for participant in participants
+    )
+
+
+def _lark_local_rtc_is_joined(meeting_id, now=None):
+    if not meeting_id:
+        return False
+    current_time = time.time() if now is None else now
+    candidates = []
+    for directory in LARK_RTC_LOG_DIRS:
+        try:
+            candidates.extend(directory.glob("*_rtclog.log"))
+        except OSError:
+            continue
+    fresh_logs = []
+    for path in candidates:
+        try:
+            stat = path.stat()
+        except OSError:
+            continue
+        age = current_time - stat.st_mtime
+        if -5 <= age <= LARK_RTC_LOG_FRESHNESS_SEC:
+            fresh_logs.append((stat.st_mtime, stat.st_size, path))
+    room_markers = (
+        f"room_id:{meeting_id}".encode(),
+        f"room_id_{meeting_id}".encode(),
+    )
+    for _mtime, size, path in sorted(fresh_logs, reverse=True)[:3]:
+        try:
+            with path.open("rb") as handle:
+                handle.seek(max(0, size - LARK_RTC_LOG_SCAN_BYTES))
+                chunk = handle.read(LARK_RTC_LOG_SCAN_BYTES)
+        except OSError:
+            continue
+        if any(marker in chunk for marker in room_markers):
+            return True
+    return False
+
+
 def _detect_lark_cli_meeting(cfg):
     enabled = cfg.get("lark_cli_active_meeting")
     if type(enabled) is not bool or not enabled:
@@ -280,48 +388,39 @@ def _detect_lark_cli_meeting(cfg):
     executable = _lark_cli_executable()
     if not executable:
         return None
-    try:
-        result = subprocess.run(
-            [
-                executable,
-                "vc",
-                "+meeting-list-active",
-                "--as",
-                "user",
-                "--format",
-                "json",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=8,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return None
-    if result.returncode != 0 or len(result.stdout.encode("utf-8")) > 1024 * 1024:
-        return None
-    try:
-        payload = json.loads(result.stdout)
-    except json.JSONDecodeError:
-        return None
+    payload = _run_lark_cli_json([
+        executable,
+        "vc",
+        "+meeting-list-active",
+        "--as",
+        "user",
+        "--format",
+        "json",
+    ])
     data = payload.get("data") if isinstance(payload, dict) else None
     meetings = data.get("meetings") if isinstance(data, dict) else None
-    if not isinstance(meetings, list) or not meetings:
+    if not isinstance(meetings, list):
         return None
-    meeting = meetings[0]
-    if not isinstance(meeting, dict):
-        return None
-    meeting_id = str(meeting.get("meeting_id", "")).strip()
-    title = normalize_title(str(meeting.get("meeting_title", "")).strip() or "Lark Meeting")
-    if not meeting_id:
-        return None
-    return {
-        "active": True,
-        "title": title,
-        "app": "Lark",
-        "window": "",
-        "signature": signature("Lark", meeting_id),
-        "fallback": "lark_cli",
-    }
+    for meeting in meetings:
+        if not isinstance(meeting, dict):
+            continue
+        meeting_id = str(meeting.get("meeting_id", "")).strip()
+        if not meeting_id:
+            continue
+        if not _lark_cli_current_user_is_joined(executable, meeting_id):
+            continue
+        if not _lark_local_rtc_is_joined(meeting_id):
+            continue
+        title = normalize_title(str(meeting.get("meeting_title", "")).strip() or "Lark Meeting")
+        return {
+            "active": True,
+            "title": title,
+            "app": "Lark",
+            "window": "",
+            "signature": signature("Lark", meeting_id),
+            "fallback": "lark_cli",
+        }
+    return None
 
 
 def _compile_patterns(words):
