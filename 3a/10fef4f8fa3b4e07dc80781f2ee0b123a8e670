@@ -1,0 +1,15 @@
+yulu/scripts/yulu_ui/web/src/routes/inbox/recordings.css
+  ai_agent 195-261
+yulu/scripts/yulu_ui/web/src/routes/inbox/recordings.tsx
+  ai_agent 1,5,32-35,72,74,96-98,102,106,134-143,148-154,227-231,238-239,252-255,265-316,318-327
+yulu/scripts/yulu_ui/tests/web/recordings.list.test.tsx
+  ai_agent 3,23-26,101-144
+yulu/scripts/yulu_ui/web/src/i18n/messages.ts
+  ai_agent 476-479,1933-1936
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.4",
+  "base_commit_sha": "3a10fef4f8fa3b4e07dc80781f2ee0b123a8e670",
+  "prompts": {}
+}
