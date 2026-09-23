@@ -72,6 +72,30 @@ def test_meeting_detector_uses_active_lark_cli_meeting_without_accessibility() -
     ]
 
 
+def test_lark_cli_ignores_inherited_proxy_without_losing_other_environment(monkeypatch) -> None:
+    monkeypatch.setenv("HTTPS_PROXY", "http://blocked-proxy.invalid:8080")
+    monkeypatch.setenv("https_proxy", "http://blocked-proxy.invalid:8080")
+    monkeypatch.setenv("ALL_PROXY", "socks5://blocked-proxy.invalid:1080")
+    monkeypatch.setenv("HTTP_PROXY", "http://blocked-proxy.invalid:8080")
+    monkeypatch.setenv("YULU_APPLICATION_SUPPORT_DIR", "/test/yulu")
+    payload = {"ok": True, "data": {"meetings": [{"meeting_id": "meeting-1"}]}}
+
+    def run_cli(_arguments, **kwargs):
+        env = kwargs["env"]
+        assert not ({
+            "HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy",
+            "ALL_PROXY", "all_proxy", "NO_PROXY", "no_proxy",
+        } & env.keys())
+        assert env["YULU_APPLICATION_SUPPORT_DIR"] == "/test/yulu"
+        return SimpleNamespace(returncode=0, stdout=meeting_detector.json.dumps(payload))
+
+    with patch.object(meeting_detector.subprocess, "run", side_effect=run_cli) as run:
+        assert meeting_detector._lark_cli_active_meetings("/test/lark-cli") == [
+            {"meeting_id": "meeting-1"},
+        ]
+    run.assert_called_once()
+
+
 def test_lark_cli_active_schedule_without_current_user_join_is_ignored() -> None:
     config = {
         **meeting_detector.DEFAULT_CONFIG,

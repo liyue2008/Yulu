@@ -304,12 +304,22 @@ def _lark_cli_executable():
 
 
 def _run_lark_cli_json(arguments, timeout=8):
+    # The App can inherit a proxy that blocks Lark's API even when lark-cli works
+    # from an interactive shell. Keep the user's CLI credentials and other env,
+    # but let this local meeting probe connect without an inherited proxy.
+    env = os.environ.copy()
+    for key in (
+        "HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy",
+        "ALL_PROXY", "all_proxy", "NO_PROXY", "no_proxy",
+    ):
+        env.pop(key, None)
     try:
         result = subprocess.run(
             arguments,
             capture_output=True,
             text=True,
             timeout=timeout,
+            env=env,
         )
     except (OSError, subprocess.TimeoutExpired):
         return None
