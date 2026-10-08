@@ -1155,7 +1155,7 @@ def transcribe_dictation(
         stt_t0 = time.monotonic()
         payload = _host_agent_request(
             "/api/agent/transcribe",
-            {"audioPath": stt_audio_path, "language": language},
+            {"audioPath": stt_audio_path, "language": language, "tier": "fast"},
             timeout_sec=timeout_sec,
         )
         stt_t1 = time.monotonic()

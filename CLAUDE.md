@@ -26,8 +26,9 @@ separate from the selected summary and conversation Agents.
 Do not add automatic fallback between audio engines or Summary Providers, a
 second chat engine, connector executor, or file-only work queue to Yulu. The
 accepted decisions are [`ADR-005`](yulu/spec/adr/005-agent-native-durable-recording-pipeline.md),
-[`ADR-007`](yulu/spec/adr/007-explicit-audio-transcription-engines.md), and
-[`ADR-009`](yulu/spec/adr/009-grok-cli-compatible-xai-oauth.md).
+[`ADR-007`](yulu/spec/adr/007-explicit-audio-transcription-engines.md),
+[`ADR-009`](yulu/spec/adr/009-grok-cli-compatible-xai-oauth.md), and
+[`ADR-010`](yulu/spec/adr/010-offline-final-transcription-and-captions-off.md).
 
 ### Constraints
 
@@ -61,7 +62,9 @@ accepted decisions are [`ADR-005`](yulu/spec/adr/005-agent-native-durable-record
 - React, React Router, TanStack Query, Vite, and wavesurfer.js for the UI.
 - Optional local Agent CLIs for the capabilities the user explicitly selects;
   Hermes and OpenClaw are Conversation-only.
-- `sherpa-onnx` Paraformer for the Yulu-managed local audio engine.
+- `sherpa-onnx` Paraformer for the Yulu-managed local audio engine, plus the
+  offline FireRedASR INT8 + silero-vad final-transcription worker
+  (`sherpa_offline_worker.py`) for the local final tier (ADR-010).
 - `ffmpeg`/`sox` for audio inspection and transport preparation, including xAI
   batch-upload compression.
 - Optional `gog`/`cloudflared` only for Yulu-owned calendar scheduling.
@@ -277,6 +280,9 @@ sending -> delivery_reported -> completed
 - ADR-007 supersedes the audio ownership and fallback decisions in ADR-005 and ADR-006.
 - ADR-009 supersedes ADR-008's summary capability boundary while retaining its
   Yulu-managed xAI credential custody and no-silent-fallback rules.
+- ADR-010 restores ADR-006's two-stage quality split inside the local engine
+  (streaming fast tier vs offline FireRedASR final tier) and defaults captions
+  and the status window to off, without changing ADR-007 engine selection.
 - ADR-002 remains relevant for glossary data; the selected audio engine consumes that context.
 - Historical ADR bodies remain history and must not be treated as active
   implementation instructions.

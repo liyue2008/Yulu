@@ -37,7 +37,7 @@ import {
   type TranscriptionResult,
   type TranscriptionLanguage,
 } from "./realtimeTranscription.js";
-import type { AudioTranscriptionService } from "./audioTranscription.js";
+import type { AudioTranscriptionService, AudioTranscriptionTier } from "./audioTranscription.js";
 import { XaiTextUnknownOutcomeError, type XaiTextClient } from "./xaiText.js";
 import type { XaiCredentialSource } from "./xaiCredentials.js";
 import { verifiedCoreActivationEvidence } from "./coreActivation.js";
@@ -133,6 +133,7 @@ export interface RecordingCompletionInput {
 export interface OnDemandTranscriptionInput {
   audioPath: string;
   language?: TranscriptionLanguage;
+  tier?: AudioTranscriptionTier;
 }
 
 export interface SummaryRegenerationInput {
@@ -241,6 +242,7 @@ export class RecordingPipeline {
       audioPath,
       normalizeTranscriptionLanguage(input.language ?? this.options.config.read().transcription.language),
       glossary,
+      input.tier ?? "final",
     );
     return { ...result, transcript: glossary ? applyGlossaryContract(result.transcript, glossary) : result.transcript };
   }
@@ -707,6 +709,13 @@ export class RecordingPipeline {
           task.audioPath,
           task.transcriptionLanguage,
           glossary,
+          "final",
+          (progress) => {
+            if (!progress.message) return;
+            try {
+              this.options.store.recordProgress(task.id, leaseToken, "transcribing", progress.message);
+            } catch { /* progress reporting must never fail transcription */ }
+          },
         );
         const transcript = glossary
           ? applyGlossaryContract(rawTranscription.transcript, glossary)

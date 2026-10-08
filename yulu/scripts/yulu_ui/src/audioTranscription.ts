@@ -19,8 +19,10 @@ import {
 import { XaiAudioClient } from "./xaiAudio.js";
 import { XAI_TRANSCRIPTION_DISCLOSURE_VERSION } from "./transcriptionConsent.js";
 import { SourceSeparatedResampler } from "./pcmResampler.js";
+import { OfflineTranscriptionService, type OfflineTranscriptionProgress } from "./offlineTranscription.js";
 
 export type AudioTranscriptionEngine = "local" | "xai";
+export type AudioTranscriptionTier = "final" | "fast";
 
 interface StableItem {
   source: CaptionSource;
@@ -96,6 +98,7 @@ export class AudioTranscriptionService implements StreamingCaptionEngine {
     private readonly xai: XaiAudioClient,
     private readonly hasXaiTranscriptionConsent: () => boolean,
     private readonly glossary?: () => GlossaryContract,
+    private readonly offline?: OfflineTranscriptionService,
   ) {}
 
   get provider(): string {
@@ -174,6 +177,8 @@ export class AudioTranscriptionService implements StreamingCaptionEngine {
     audioPath: string,
     language: TranscriptionLanguage,
     glossary?: GlossaryContract,
+    tier: AudioTranscriptionTier = "final",
+    onProgress?: (progress: OfflineTranscriptionProgress) => void,
   ): Promise<TranscriptionResult> {
     if (selectedEngine(this.config) === "xai") {
       this.requireXaiTranscriptionConsent();
@@ -187,6 +192,10 @@ export class AudioTranscriptionService implements StreamingCaptionEngine {
     }
     const status = this.local.status();
     if (!status.ready) throw new AgentUnavailableError(status.error || "本地转写模型尚未安装");
+    if (tier === "final" && this.config.read().transcription.local.final_model === "fire-red") {
+      if (!this.offline) throw new AgentUnavailableError("离线高质量转录服务未配置；请改用 paraformer-replay");
+      return await this.offline.transcribeFile(audioPath, language, onProgress);
+    }
     return await this.transcribeLocalFile(audioPath, language);
   }
 
