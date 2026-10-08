@@ -1,0 +1,19 @@
+tests/test_local_caption_runtime.py
+  s_791bc46647d28f::t_3f8cee969155d3 471-554
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "90ea35a02afc15f7381cbe24b3e7e2e240c236f3",
+  "prompts": {},
+  "sessions": {
+    "s_791bc46647d28f": {
+      "agent_id": {
+        "tool": "pi",
+        "id": "01a11bed-345a-7335-bc79-66d2c4579fd8",
+        "model": "glm-5.3"
+      },
+      "human_author": "ethan.li <ethan.li@lbk.one>"
+    }
+  }
+}
