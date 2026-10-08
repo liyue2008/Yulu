@@ -1,0 +1,32 @@
+docs/configuration.md
+  h_b4d40596eab523 204-205
+tests/test_meeting_daemon_captions_gate.py
+  h_b4d40596eab523 1-216
+yulu/scripts/config.example.json
+  h_b4d40596eab523 55-59
+yulu/scripts/meeting_daemon.py
+  h_b4d40596eab523 135-167,679-687,689,692-693,1023-1025
+yulu/scripts/yulu_ui/src/config.ts
+  h_b4d40596eab523 125-128
+yulu/scripts/yulu_ui/src/settingsRegistry.ts
+  h_b4d40596eab523 92-95
+yulu/scripts/yulu_ui/tests/config.test.ts
+  h_b4d40596eab523 61-74
+yulu/scripts/yulu_ui/tests/settingsRegistry.test.ts
+  h_b4d40596eab523 38-49
+yulu/scripts/yulu_ui/web/src/components/settings/TranscriptionSection.tsx
+  h_b4d40596eab523 149-168
+yulu/scripts/yulu_ui/web/src/i18n/messages.ts
+  h_b4d40596eab523 878-881,2337-2340
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "90bf257fc2fd99fdf9e2978b65abe4811c1b9763",
+  "prompts": {},
+  "humans": {
+    "h_b4d40596eab523": {
+      "author": "ethan.li <ethan.li@lbk.one>"
+    }
+  }
+}
