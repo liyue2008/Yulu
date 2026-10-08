@@ -765,6 +765,17 @@ def _consume_runtime_event(event_id):
     return _update_runtime_events(consume)
 
 
+def _lark_meeting_is_running():
+    """Suppress reminders only for a confirmed, locally joined Lark meeting."""
+    from meeting_detector import _detect_lark_cli_meeting
+
+    try:
+        return _detect_lark_cli_meeting({"lark_cli_active_meeting": True}) is not None
+    except (OSError, RuntimeError, subprocess.TimeoutExpired):
+        # An unavailable probe must not disable the long-recording safeguard.
+        return False
+
+
 def cmd_auto_stop(event_id=None):
     if event_id and not _consume_runtime_event(event_id):
         print(f"忽略已处理的录音提醒: {event_id}")
@@ -775,13 +786,25 @@ def cmd_auto_stop(event_id=None):
         print("没有正在进行的录制")
         return
     title = rec.get("title", "")
-    notify = SCRIPT_DIR / "notify.py"
-    result = subprocess.run(
-        [sys.executable, str(notify), "ask_stop", title],
-        capture_output=True, text=True,
-    )
-    choice = result.stdout.strip()
-    print(f"Stop choice: {choice}")
+    lark_running = _lark_meeting_is_running()
+    # The network probe may outlive this capture. Do not prompt or extend a
+    # reminder for a replacement recording.
+    current = recording_info(load_state())
+    if not current or any(current.get(key) != rec.get(key) for key in ("audio_path", "file_path", "started_at", "meeting_id")):
+        print("录音状态已变化，忽略旧的结束提醒")
+        return
+
+    if lark_running:
+        choice = "继续录制"
+        print("飞书会议仍在进行，跳过录音结束提醒")
+    else:
+        notify = SCRIPT_DIR / "notify.py"
+        result = subprocess.run(
+            [sys.executable, str(notify), "ask_stop", title],
+            capture_output=True, text=True,
+        )
+        choice = result.stdout.strip()
+        print(f"Stop choice: {choice}")
 
     # A persistent prompt may outlive its recording. Never apply its answer to
     # a later capture, including a new recording of the same meeting.
@@ -793,7 +816,7 @@ def cmd_auto_stop(event_id=None):
     if choice in ("停止录制", "停止"):
         _stop_and_process(stop_reason="manual")
     else:
-        # 用户选继续：再延 30 分钟问一次。save_schedule 会顺手清理已过期 ask_stop。
+        # 用户选继续或飞书会议仍在进行：30 分钟后重新检查，再决定是否询问。
         end_at = datetime.now() + timedelta(minutes=30)
         _add_runtime_event({
             "id": f"recording-{rec.get('meeting_id','manual')}::ask_stop_extended",

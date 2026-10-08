@@ -15,6 +15,13 @@ SCRIPTS = Path(__file__).resolve().parents[1] / "yulu" / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
 
+@pytest.fixture(autouse=True)
+def no_live_lark_probe(monkeypatch):
+    import meeting_daemon
+
+    monkeypatch.setattr(meeting_daemon, "_lark_meeting_is_running", lambda: False)
+
+
 class _Response:
     def __init__(self, status=202):
         self.status = status
@@ -503,6 +510,7 @@ def test_start_recording_uses_capture_controller(monkeypatch, tmp_path):
 def test_old_stop_prompt_cannot_end_a_new_recording(monkeypatch, tmp_path):
     import meeting_daemon
     states = iter([
+        {"title": "Same meeting", "meeting_id": "meeting1", "audio_path": str(tmp_path / "old.wav"), "started_at": "before"},
         {"title": "Same meeting", "meeting_id": "meeting1", "audio_path": str(tmp_path / "old.wav"), "started_at": "before"},
         {"title": "Same meeting", "meeting_id": "meeting1", "audio_path": str(tmp_path / "new.wav"), "started_at": "after"},
     ])
