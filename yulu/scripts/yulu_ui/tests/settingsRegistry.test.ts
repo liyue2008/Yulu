@@ -35,6 +35,18 @@ describe("settingsRegistry", () => {
     expect(reloadFor("transcription.engine")).toEqual({ kind: "none" });
     expect(defFor("transcription.xai_credential_source")).toBeUndefined();
   });
+  it("caption opt-ins are toggles that apply without daemon reload", () => {
+    const realtime = defFor("transcription.captions.realtime_enabled");
+    expect(realtime?.type).toBe("toggle");
+    expect(realtime?.category).toBe("transcription");
+    expect(realtime?.validate.safeParse(true).success).toBe(true);
+    expect(realtime?.validate.safeParse("yes").success).toBe(false);
+    expect(reloadFor("transcription.captions.realtime_enabled")).toEqual({ kind: "none" });
+    const window = defFor("transcription.captions.status_window_enabled");
+    expect(window?.type).toBe("toggle");
+    expect(window?.validate.safeParse(false).success).toBe(true);
+    expect(reloadFor("transcription.captions.status_window_enabled")).toEqual({ kind: "none" });
+  });
   it("llm.command 改完无需动作(读取即生效)", () => {
     expect(reloadFor("llm.command")).toEqual({ kind: "none" });
   });

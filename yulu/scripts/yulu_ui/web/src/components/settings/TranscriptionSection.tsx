@@ -146,6 +146,26 @@ export function TranscriptionSection({ tracker }: TranscriptionSectionProps) {
         status={tracker.statusFor("transcription.language")}
       />
 
+      <InlineEditRow
+        label={t("settings.transcription.captions.realtimeEnabled.label")}
+        help={t("settings.transcription.captions.realtimeEnabled.help")}
+        type="toggle"
+        value={config.transcription.captions?.realtime_enabled ?? false}
+        onCommit={commit("transcription.captions.realtime_enabled") as (value: boolean) => void}
+        disabled={isBlocked("transcription.captions.realtime_enabled")}
+        status={tracker.statusFor("transcription.captions.realtime_enabled")}
+      />
+
+      <InlineEditRow
+        label={t("settings.transcription.captions.statusWindow.label")}
+        help={t("settings.transcription.captions.statusWindow.help")}
+        type="toggle"
+        value={config.transcription.captions?.status_window_enabled ?? false}
+        onCommit={commit("transcription.captions.status_window_enabled") as (value: boolean) => void}
+        disabled={isBlocked("transcription.captions.status_window_enabled")}
+        status={tracker.statusFor("transcription.captions.status_window_enabled")}
+      />
+
       {selectedEngine === "local" ? localModel : (
       <div className="local-caption-card" data-installed={providers.data?.connection.connected ? "true" : "false"}>
         <div className="local-caption-head">

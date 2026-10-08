@@ -58,6 +58,20 @@ describe("ConfigManager", () => {
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 
+  it("transcription.captions defaults to both realtime surfaces off", () => {
+    const dir = mkdtempSync(join(tmpdir(), "yulu_caps_"));
+    const path = join(dir, "config.json");
+    fs.writeFileSync(path, JSON.stringify({ audio: { output_dir: "~/Movies/Yulu" } }));
+    try {
+      const cfg = new ConfigManager(path).read();
+      expect(cfg.transcription.captions.realtime_enabled).toBe(false);
+      expect(cfg.transcription.captions.status_window_enabled).toBe(false);
+      const parsed = ConfigSchema.parse({ transcription: { captions: { realtime_enabled: true } } });
+      expect(parsed.transcription.captions.realtime_enabled).toBe(true);
+      expect(parsed.transcription.captions.status_window_enabled).toBe(false);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
   it("read() defaults status_agent.enabled to true when the block is missing", () => {
     const dir = mkdtempSync(join(tmpdir(), "yulu_status_agent_default_"));
     const path = join(dir, "config.json");

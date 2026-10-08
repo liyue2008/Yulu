@@ -122,6 +122,10 @@ export const ConfigSchema = z.object({
     language: z.enum(["zh", "en", "ja", "auto"]).default("zh"),
     glossary: z.array(z.string()).optional(),
     dictation: DictationSchema,
+    captions: z.object({
+      realtime_enabled: z.boolean().default(false),
+      status_window_enabled: z.boolean().default(false),
+    }).passthrough().default({}),
   }).passthrough().default({}),
   llm: z.object({
     enabled: z.boolean().optional(),

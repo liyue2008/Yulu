@@ -201,6 +201,8 @@ and dictation. The default is local and there is no automatic fallback.
 |---|---:|---|
 | `engine` | `"local"` | `local` or `xai`; the selected value is used exactly for all audio transcription paths. |
 | `language` | `"zh"` | `zh`, `en`, `ja`, or `auto`. Japanese requires the `xai` engine; Settings rejects the unsupported `local` + `ja` combination. |
+| `captions.realtime_enabled` | `false` | Opt-in realtime meeting captions. When false, capture skips starting the realtime session; the full transcript is still produced after the recording stops. Dictation keeps using the realtime endpoints and is unaffected. |
+| `captions.status_window_enabled` | `false` | Opt-in floating recording status window with live captions. When false, no `recorder_status` window is launched during recordings. |
 | `dictation.cleanup_enabled` | `true` | Clean up normal xAI dictation through the explicitly selected and authorized xAI conversation connection. Local dictation stays on-device; short text and failed cleanup keep the original transcript. |
 | `dictation.voice_chat_scope` | `"general"` | Default voice-question scope: `general` uses conversation history only; `meetings` enables meeting questions. Changing this setting starts a new voice conversation on the next question. |
 | `dictation.prompt_slug` | `"dictation-cleanup"` | Local prompt selected for normal dictation cleanup. |
