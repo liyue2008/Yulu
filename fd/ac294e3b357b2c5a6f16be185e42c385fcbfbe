@@ -1,0 +1,33 @@
+docs/ARCHITECTURE.md
+  s_791bc46647d28f::t_dfba75ade8078a 42
+packaging/scripts/verify_application_runtime.sh
+  s_791bc46647d28f::t_54ea00fec50a6c 51-52,339-341
+tests/test_application_runtime.py
+  s_791bc46647d28f::t_0c664d956fbc25 161-162,280-281
+tests/test_sherpa_offline_worker.py
+  s_11f0af2dbffb44::t_fe28bd5ae12dd9 1-221
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "fdac294e3b357b2c5a6f16be185e42c385fcbfbe",
+  "prompts": {},
+  "sessions": {
+    "s_11f0af2dbffb44": {
+      "agent_id": {
+        "tool": "pi",
+        "id": "01a11c0b-6224-7303-9cb1-77bb9baa70d0",
+        "model": "glm-5.3"
+      },
+      "human_author": "ethan.li <ethan.li@lbk.one>"
+    },
+    "s_791bc46647d28f": {
+      "agent_id": {
+        "tool": "pi",
+        "id": "01a11bed-345a-7335-bc79-66d2c4579fd8",
+        "model": "glm-5.3"
+      },
+      "human_author": "ethan.li <ethan.li@lbk.one>"
+    }
+  }
+}
