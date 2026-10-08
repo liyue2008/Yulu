@@ -285,12 +285,30 @@ def collect_running_process_commands():
 
 
 def _lark_cli_executable():
+    home = Path.home()
     candidates = [
         shutil.which("lark-cli"),
-        str(Path.home() / ".npm-global/bin/lark-cli"),
-        str(Path.home() / ".local/bin/lark-cli"),
-        str(Path.home() / "bin/lark-cli"),
+        str(home / ".npm-global/bin/lark-cli"),
+        str(home / ".local/bin/lark-cli"),
+        str(home / "bin/lark-cli"),
     ]
+    # GUI launches do not source the user's shell/nvm initialization. Search
+    # known nvm locations without executing shell startup files.
+    nvm_roots = [home / ".nvm"]
+    if os.environ.get("NVM_DIR"):
+        nvm_roots.insert(0, Path(os.environ["NVM_DIR"]).expanduser())
+    for root in dict.fromkeys(nvm_roots):
+        candidates.append(str(root / "current/bin/lark-cli"))
+        try:
+            versions = []
+            for directory in (root / "versions/node").glob("v*"):
+                match = re.fullmatch(r"v(\d+)\.(\d+)\.(\d+)", directory.name)
+                if match:
+                    versions.append((tuple(map(int, match.groups())), directory))
+            for _version, directory in sorted(versions, reverse=True):
+                candidates.append(str(directory / "bin/lark-cli"))
+        except OSError:
+            continue
     for candidate in candidates:
         if not candidate:
             continue
@@ -308,6 +326,10 @@ def _run_lark_cli_json(arguments, timeout=8):
     # from an interactive shell. Keep the user's CLI credentials and other env,
     # but let this local meeting probe connect without an inherited proxy.
     env = os.environ.copy()
+    # npm CLIs use /usr/bin/env node. Finding an absolute CLI path is not
+    # enough: let it use the runtime beside it, not the App's bundled Node.
+    executable_dir = str(Path(arguments[0]).absolute().parent)
+    env["PATH"] = executable_dir + os.pathsep + env.get("PATH", os.defpath)
     for key in (
         "HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy",
         "ALL_PROXY", "all_proxy", "NO_PROXY", "no_proxy",

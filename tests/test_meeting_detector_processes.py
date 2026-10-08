@@ -9,6 +9,84 @@ import meeting_detector
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def _make_executable(path: Path, content: str = "#!/bin/sh\nexit 0\n") -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
+    path.chmod(0o755)
+    return path
+
+
+def test_lark_cli_discovery_finds_nvm_with_app_path(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(meeting_detector.Path, "home", lambda: tmp_path)
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    monkeypatch.delenv("NVM_DIR", raising=False)
+    cli = _make_executable(tmp_path / ".nvm/versions/node/v22.20.0/bin/lark-cli")
+    assert meeting_detector._lark_cli_executable() == str(cli)
+
+
+def test_lark_cli_discovery_preserves_path_priority(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(meeting_detector.Path, "home", lambda: tmp_path)
+    cli = _make_executable(tmp_path / "preferred/bin/lark-cli")
+    _make_executable(tmp_path / ".nvm/versions/node/v24.0.0/bin/lark-cli")
+    monkeypatch.setenv("PATH", str(cli.parent))
+    assert meeting_detector._lark_cli_executable() == str(cli)
+
+
+def test_lark_cli_discovery_orders_nvm_versions_numerically(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(meeting_detector.Path, "home", lambda: tmp_path)
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    monkeypatch.delenv("NVM_DIR", raising=False)
+    _make_executable(tmp_path / ".nvm/versions/node/v9.9.9/bin/lark-cli")
+    cli = _make_executable(tmp_path / ".nvm/versions/node/v22.20.0/bin/lark-cli")
+    rejected = _make_executable(tmp_path / ".nvm/versions/node/v24.0.0/bin/lark-cli")
+    rejected.chmod(0o644)
+    assert meeting_detector._lark_cli_executable() == str(cli)
+
+
+def test_lark_cli_discovery_supports_custom_nvm_dir(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(meeting_detector.Path, "home", lambda: tmp_path)
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    monkeypatch.setenv("NVM_DIR", str(tmp_path / "custom-nvm"))
+    cli = _make_executable(tmp_path / "custom-nvm/versions/node/v22.20.0/bin/lark-cli")
+    assert meeting_detector._lark_cli_executable() == str(cli)
+
+
+def test_lark_cli_discovery_preserves_legacy_location_priority(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(meeting_detector.Path, "home", lambda: tmp_path)
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    monkeypatch.delenv("NVM_DIR", raising=False)
+    cli = _make_executable(tmp_path / ".npm-global/bin/lark-cli")
+    _make_executable(tmp_path / ".nvm/versions/node/v24.0.0/bin/lark-cli")
+    assert meeting_detector._lark_cli_executable() == str(cli)
+
+
+def test_lark_cli_discovery_returns_none_when_not_installed(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(meeting_detector.Path, "home", lambda: tmp_path)
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    monkeypatch.delenv("NVM_DIR", raising=False)
+    assert meeting_detector._lark_cli_executable() is None
+
+
+def test_lark_cli_discovery_prefers_nvm_current(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(meeting_detector.Path, "home", lambda: tmp_path)
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    monkeypatch.delenv("NVM_DIR", raising=False)
+    cli = _make_executable(tmp_path / ".nvm/current/bin/lark-cli")
+    _make_executable(tmp_path / ".nvm/versions/node/v24.0.0/bin/lark-cli")
+    assert meeting_detector._lark_cli_executable() == str(cli)
+
+
+def test_lark_cli_runs_env_node_shebang_with_its_sibling_runtime(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    cli = _make_executable(tmp_path / "node/bin/lark-cli", "#!/usr/bin/env node\n")
+    _make_executable(
+        cli.parent / "node",
+        '#!/bin/sh\nprintf \'%s\\n\' \'{"ok": true, "data": {"meetings": []}}\'\n',
+    )
+    assert meeting_detector._lark_cli_active_meetings(str(cli)) == []
+    assert meeting_detector.os.environ["PATH"] == "/usr/bin:/bin"
+
+
 def test_meeting_detector_uses_running_meeting_app_when_titles_are_unavailable() -> None:
     config = dict(meeting_detector.DEFAULT_CONFIG)
     with (
