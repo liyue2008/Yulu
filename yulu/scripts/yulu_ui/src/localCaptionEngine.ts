@@ -37,10 +37,25 @@ export interface LocalCaptionRuntime {
   runtimePack: string;
   workerPath: string;
   modelDir: string;
+  offlineModelDir: string;
+  vadModelDir: string;
 }
 
 const MODEL_NAME = "sherpa-onnx-streaming-paraformer-bilingual-zh-en";
+export const OFFLINE_MODEL_NAME = "sherpa-onnx-fire-red-asr-large-zh_en-2025-02-16";
+export const VAD_MODEL_NAME = "silero-vad";
+export const OFFLINE_MODEL_PROVIDER = "sherpa-onnx-fire-red-asr-large-int8";
 const REQUIRED_MODEL_FILES = ["tokens.txt", "encoder.int8.onnx", "decoder.int8.onnx"] as const;
+const REQUIRED_OFFLINE_MODEL_FILES = ["tokens.txt", "encoder.int8.onnx", "decoder.int8.onnx"] as const;
+const REQUIRED_VAD_MODEL_FILES = ["silero_vad.onnx"] as const;
+
+export function isOfflineModelInstalled(dir: string): boolean {
+  return REQUIRED_OFFLINE_MODEL_FILES.every((name) => existsSync(join(dir, name)));
+}
+
+export function isVadModelInstalled(dir: string): boolean {
+  return REQUIRED_VAD_MODEL_FILES.every((name) => existsSync(join(dir, name)));
+}
 
 function usableRuntime(runtime: LocalCaptionRuntime): boolean {
   return existsSync(runtime.python) && existsSync(runtime.pythonPath) &&
@@ -72,10 +87,26 @@ export function resolveLocalCaptionRuntime(input: {
       runtimePack,
       workerPath: join(input.scriptDir, "sherpa_caption_worker.py"),
       modelDir: env.YULU_LOCAL_CAPTION_MODEL_DIR?.trim() || join(candidate.modelsDir, MODEL_NAME),
+      offlineModelDir: env.YULU_LOCAL_CAPTION_OFFLINE_MODEL_DIR?.trim() || join(candidate.modelsDir, OFFLINE_MODEL_NAME),
+      vadModelDir: env.YULU_LOCAL_CAPTION_VAD_MODEL_DIR?.trim() || join(candidate.modelsDir, VAD_MODEL_NAME),
     };
     if (usableRuntime(runtime)) return runtime;
   }
   return null;
+}
+
+/** Model-asset locations for the current (non-legacy) config dir; independent of streaming runtime usability. */
+export function resolveLocalCaptionAssets(input: {
+  configDir: string;
+  modelsDir?: string;
+  env?: NodeJS.ProcessEnv;
+}): { offlineModelDir: string; vadModelDir: string } {
+  const env = input.env ?? process.env;
+  const modelsDir = input.modelsDir ?? join(input.configDir, "models");
+  return {
+    offlineModelDir: env.YULU_LOCAL_CAPTION_OFFLINE_MODEL_DIR?.trim() || join(modelsDir, OFFLINE_MODEL_NAME),
+    vadModelDir: env.YULU_LOCAL_CAPTION_VAD_MODEL_DIR?.trim() || join(modelsDir, VAD_MODEL_NAME),
+  };
 }
 
 interface WorkerResponse {

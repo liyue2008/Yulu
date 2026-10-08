@@ -281,6 +281,7 @@ vi.mock("../../../web/src/trpc.js", () => {
         install: { useMutation: noopMutation },
         uninstall: { useMutation: noopMutation },
         test: { useMutation: noopMutation },
+        testOffline: { useMutation: noopMutation },
       },
       xaiAudio: {
         status: { useQuery: () => ({ data: {

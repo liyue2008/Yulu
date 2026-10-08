@@ -98,6 +98,9 @@ describe("LocalCaptionManager", () => {
       installed: true,
       ready: true,
       operation: "idle",
+      offlineModelReady: false,
+      offlineModelBytes: 0,
+      vadReady: false,
     });
 
     await expect(manager.test()).resolves.toMatchObject({ ok: true, provider: "sherpa-onnx-paraformer-int8" });
@@ -224,6 +227,88 @@ describe("LocalCaptionManager", () => {
 
     await expect(manager.warm()).rejects.toThrow("model load failed");
     expect(manager.status()).toMatchObject({ ready: false, error: "model load failed" });
+    await manager.close();
+  });
+
+  it("forwards the selected model key to install and uninstall", async () => {
+    const root = mkdtempSync(join(tmpdir(), "yulu-caption-model-flag-"));
+    roots.push(root);
+    const scriptDir = join(root, "scripts");
+    const configDir = join(root, "Library/Application Support/Yulu");
+    const modelsDir = join(configDir, "Standard Models");
+    const argvPath = join(root, "installer-argv.json");
+    mkdirSync(scriptDir, { recursive: true });
+    writeFileSync(join(scriptDir, "local_caption_runtime.py"), [
+      "import json, sys",
+      `open(${JSON.stringify(argvPath)}, 'w').write(json.dumps(sys.argv[1:]))`,
+      "",
+    ].join("\n"));
+    process.env.YULU_PYTHON = existsSync("/opt/homebrew/bin/python3")
+      ? "/opt/homebrew/bin/python3"
+      : execFileSync("which", ["python3"], { encoding: "utf8" }).trim();
+
+    const manager = new LocalCaptionManager({
+      scriptDir,
+      configDir,
+      modelsDir,
+      selected: () => false,
+    });
+
+    await manager.install({ model: "offline-final" });
+    expect(JSON.parse(readFileSync(argvPath, "utf8"))).toEqual([
+      "install",
+      "--config-dir",
+      configDir,
+      "--models-dir",
+      modelsDir,
+      "--model",
+      "offline-final",
+    ]);
+
+    await manager.uninstall({ model: "silero-vad" });
+    expect(JSON.parse(readFileSync(argvPath, "utf8"))).toEqual([
+      "uninstall",
+      "--config-dir",
+      configDir,
+      "--models-dir",
+      modelsDir,
+      "--model",
+      "silero-vad",
+    ]);
+  });
+
+  it("refuses the offline smoke test before the offline assets are installed", async () => {
+    const manager = fixture();
+    await expect(manager.testOffline()).rejects.toThrow("离线高质量转录模型尚未安装");
+    await manager.close();
+  });
+
+  it("runs the offline smoke test through the one-shot worker when assets exist", async () => {
+    const manager = fixture();
+    const root = roots.at(-1)!;
+    const offlineDir = join(root, "config/models/sherpa-onnx-fire-red-asr-large-zh_en-2025-02-16");
+    const vadDir = join(root, "config/models/silero-vad");
+    mkdirSync(offlineDir, { recursive: true });
+    mkdirSync(vadDir, { recursive: true });
+    for (const name of ["tokens.txt", "encoder.int8.onnx", "decoder.int8.onnx"]) {
+      writeFileSync(join(offlineDir, name), name);
+    }
+    writeFileSync(join(vadDir, "silero_vad.onnx"), "vad");
+
+    const runOfflineWorker = vi.fn().mockResolvedValue(0);
+    vi.spyOn(
+      manager as unknown as { runOfflineWorker(...args: unknown[]): Promise<number> },
+      "runOfflineWorker",
+    ).mockImplementation(runOfflineWorker);
+
+    await expect(manager.testOffline()).resolves.toEqual({
+      ok: true,
+      provider: "sherpa-onnx-fire-red-asr-large-int8",
+      loadMs: expect.any(Number),
+      segments: 0,
+    });
+    expect(runOfflineWorker).toHaveBeenCalledTimes(1);
+    expect(manager.status()).toMatchObject({ offlineModelReady: true, vadReady: true });
     await manager.close();
   });
 });

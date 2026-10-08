@@ -57,6 +57,10 @@
       "status_window_enabled": false,
       "note": "会议实时字幕与录制状态浮窗默认关闭；仅显式设为 true 时开启，停止后仍会完整转写。听写不受这两个开关影响。"
     },
+    "local": {
+      "final_model": "fire-red",
+      "note": "final_model: fire-red 需在设置中下载约 1.7GB 的 FireRedASR 离线模型（未安装时最终转录会显式失败并引导安装）；paraformer-replay 沿用流式模型重放，无需额外下载。offline_threads 留空则按 CPU 核数自动选择。仅支持中英文，日语请选择 xAI 引擎。"
+    },
     "dictation": {
       "language": "zh",
       "cleanup_enabled": true,

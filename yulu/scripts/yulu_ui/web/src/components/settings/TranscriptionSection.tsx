@@ -23,10 +23,11 @@ export function TranscriptionSection({ tracker }: TranscriptionSectionProps) {
   const install = trpc.localCaption.install.useMutation({ onSettled: refreshLocal });
   const uninstall = trpc.localCaption.uninstall.useMutation({ onSettled: refreshLocal });
   const testModel = trpc.localCaption.test.useMutation({ onSettled: refreshLocal });
+  const testOfflineModel = trpc.localCaption.testOffline.useMutation({ onSettled: refreshLocal });
   const { commit, isBlocked } = useConfigField(tracker);
   const t = useT();
   const localBusy = (local.data?.operation ?? "idle") !== "idle"
-    || install.isPending || uninstall.isPending || testModel.isPending;
+    || install.isPending || uninstall.isPending || testModel.isPending || testOfflineModel.isPending;
 
   if (!config) return null;
 
@@ -116,6 +117,77 @@ export function TranscriptionSection({ tracker }: TranscriptionSectionProps) {
 
   );
 
+  const offlineModel = (
+      <div className="local-caption-card" data-installed={local.data?.offlineModelReady ? "true" : "false"}>
+        <div className="local-caption-head">
+          <div>
+            <div className="local-caption-title">{t("settings.transcription.offlineModel.title")}</div>
+            <div className="local-caption-sub">{t("settings.transcription.offlineModel.sub")}</div>
+          </div>
+          <span className={`provider-state ${local.data?.offlineModelReady ? "provider-state--ok" : "provider-state--muted"}`}>
+            {!local.data
+              ? t("common.loading")
+              : local.data.offlineModelReady
+              ? t("settings.transcription.localModel.installed")
+              : t("settings.transcription.localModel.notInstalled")}
+          </span>
+        </div>
+
+        {localBusy && (
+          <div className="local-caption-progress" role="status">
+            <div className="local-caption-progress-track">
+              <span style={{ width: `${local.data?.percent ?? 12}%` }} />
+            </div>
+            <span>{local.data?.message || t("common.loading")}</span>
+          </div>
+        )}
+
+        {(local.error || local.data?.error || install.error || uninstall.error || testOfflineModel.error) && (
+          <div className="provider-status-note provider-status-note--bad" role="alert">
+            {local.error?.message || local.data?.error || install.error?.message || uninstall.error?.message || testOfflineModel.error?.message}
+          </div>
+        )}
+        {testOfflineModel.isSuccess && local.data?.message && local.data.operation === "idle" && !local.data.error && (
+          <div className="provider-status-note">{local.data.message}</div>
+        )}
+
+        <div className="local-caption-actions">
+          {!local.data?.offlineModelReady ? (
+            <button type="button" className="path-btn local-caption-primary" disabled={localBusy || !local.data} onClick={() => install.mutate({ model: "offline-final" })}>
+              {install.isPending ? t("settings.transcription.offlineModel.installing") : t("settings.transcription.offlineModel.install")}
+            </button>
+          ) : (
+            <AdvancedDisclosure title={t("settings.transcription.localModel.manage")} note="">
+              <p>{t("settings.transcription.localModel.disk")}: {formatBytes((local.data?.offlineModelBytes ?? 0) + (local.data?.vadReady ? 644_000 : 0))}</p>
+              <p>sherpa-onnx FireRedASR · INT8{!local.data?.vadReady ? ` · ${t("settings.transcription.offlineModel.vadMissing")}` : ""}</p>
+              <div className="settings-inline-actions">
+              <button type="button" className="path-btn" disabled={localBusy} onClick={() => testOfflineModel.mutate()}>
+                {testOfflineModel.isPending ? t("settings.transcription.localModel.testing") : t("settings.transcription.localModel.test")}
+              </button>
+              <button
+                type="button"
+                className="path-btn"
+                disabled={localBusy || local.data.sessionActive}
+                onClick={() => {
+                  if (window.confirm(t("settings.transcription.offlineModel.uninstallConfirm"))) uninstall.mutate({ model: "offline-final" });
+                }}
+              >
+                {t("settings.transcription.localModel.uninstall")}
+              </button>
+              </div>
+            </AdvancedDisclosure>
+          )}
+        </div>
+        {local.data && !local.data.offlineModelReady && (
+          <div className="provider-install-hint">{t("settings.transcription.offlineModel.installHint")}</div>
+        )}
+        {local.data?.sessionActive && (
+          <div className="provider-install-hint">{t("settings.transcription.localModel.uninstallAfterRecording")}</div>
+        )}
+      </div>
+
+  );
+
   return (
     <section id="transcription" className="settings-section">
       <h2 className="settings-section-h">{t("settings.transcription.heading")}</h2>
@@ -166,7 +238,7 @@ export function TranscriptionSection({ tracker }: TranscriptionSectionProps) {
         status={tracker.statusFor("transcription.captions.status_window_enabled")}
       />
 
-      {selectedEngine === "local" ? localModel : (
+      {selectedEngine === "local" ? (<>{localModel}{offlineModel}</>) : (
       <div className="local-caption-card" data-installed={providers.data?.connection.connected ? "true" : "false"}>
         <div className="local-caption-head">
           <div>

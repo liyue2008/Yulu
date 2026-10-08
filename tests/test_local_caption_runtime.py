@@ -407,3 +407,64 @@ def test_sherpa_import_probe_preserves_runtime_pack_bytes(monkeypatch, tmp_path)
     }
     assert after == before
     assert not list(site_packages.rglob("__pycache__"))
+
+
+def test_model_registry_pins_streaming_final_and_vad_assets():
+    assert set(runtime.MODELS) == {"streaming", "offline-final", "silero-vad"}
+    final = runtime.MODELS["offline-final"]
+    assert final.sha256 and len(final.sha256) == 64
+    assert set(final.files) == {"tokens.txt", "encoder.int8.onnx", "decoder.int8.onnx"}
+    assert final.url.endswith(".tar.bz2")
+    vad = runtime.MODELS["silero-vad"]
+    assert vad.files == ("silero_vad.onnx",)
+    assert vad.url.endswith("/silero_vad.onnx")
+    # Only the streaming caption model and VAD install by default; the ~1.4 GB
+    # final-transcription model stays an explicit opt-in.
+    assert runtime.DEFAULT_INSTALL_MODELS == ("streaming", "silero-vad")
+
+
+def test_status_reports_per_model_readiness(tmp_path):
+    current = runtime.status(tmp_path)
+    assert current["offlineFinalReady"] is False
+    assert current["vadReady"] is False
+    models = current["models"]
+    assert set(models) == set(runtime.MODELS)
+    assert models["offline-final"]["provider"] == "sherpa-onnx-fire-red-asr-large-int8"
+    assert models["streaming"]["provider"] == "sherpa-onnx-paraformer-int8"
+    assert models["silero-vad"]["provider"] == "silero-vad"
+    assert models["offline-final"]["archiveBytes"] > models["streaming"]["archiveBytes"]
+
+
+def test_install_and_uninstall_scope_to_a_single_model(monkeypatch, tmp_path):
+    downloaded = []
+
+    def fake_download(asset, target):
+        downloaded.append(asset.key)
+        target.mkdir(parents=True, exist_ok=True)
+        for name in asset.files:
+            (target / name).write_bytes(b"")
+
+    monkeypatch.setattr(runtime, "_load_runtime_pack_definition", lambda: {"id": "test-pack"})
+    monkeypatch.setattr(runtime, "_install_runtime_pack", lambda runtime_dir, definition: None)
+    monkeypatch.setattr(runtime, "_download_asset", fake_download)
+    monkeypatch.setattr(runtime, "_verify_model_hashes",
+                        lambda directory, asset=None: all(
+                            (directory / name).is_file()
+                            for name in (asset or runtime.MODELS["streaming"]).files
+                        ))
+    monkeypatch.setattr(runtime, "_sherpa_import_ok", lambda *args, **kwargs: False)
+
+    result = runtime.install(tmp_path, models_dir=tmp_path / "Models", model="silero-vad")
+    assert downloaded == ["silero-vad"]
+    assert result["models"]["silero-vad"]["ready"] is True
+
+    runtime.uninstall(tmp_path, models_dir=tmp_path / "Models", model="silero-vad")
+    gone = runtime.status(tmp_path, models_dir=tmp_path / "Models")
+    assert gone["vadReady"] is False
+    assert not (tmp_path / "Models" / "silero-vad").exists()
+
+
+def test_cli_rejects_unknown_model_flag():
+    with pytest.raises(SystemExit) as excinfo:
+        runtime.main(["install", "--model", "gpt-5"])
+    assert excinfo.value.code == 2

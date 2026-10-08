@@ -4,8 +4,10 @@ import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  OFFLINE_MODEL_NAME,
   resolveLocalCaptionRuntime,
   SherpaCaptionEngine,
+  VAD_MODEL_NAME,
 } from "../src/localCaptionEngine.js";
 
 const roots: string[] = [];
@@ -52,6 +54,8 @@ describe("local caption runtime discovery", () => {
       runtimePack,
       workerPath: join(scriptDir, "sherpa_caption_worker.py"),
       modelDir,
+      offlineModelDir: join(configDir, "models", OFFLINE_MODEL_NAME),
+      vadModelDir: join(configDir, "models", VAD_MODEL_NAME),
     });
   });
 
@@ -126,6 +130,8 @@ describe("SherpaCaptionEngine", () => {
       runtimePack: root,
       workerPath,
       modelDir: root,
+      offlineModelDir: root,
+      vadModelDir: root,
     });
 
     await engine.warm();
@@ -163,6 +169,8 @@ describe("SherpaCaptionEngine", () => {
       runtimePack: root,
       workerPath,
       modelDir: root,
+      offlineModelDir: root,
+      vadModelDir: root,
     });
 
     await engine.warm();
@@ -205,6 +213,8 @@ describe("SherpaCaptionEngine", () => {
       runtimePack: root,
       workerPath,
       modelDir: root,
+      offlineModelDir: root,
+      vadModelDir: root,
     });
 
     await expect(engine.warm()).resolves.toBeUndefined();
@@ -238,6 +248,8 @@ describe("SherpaCaptionEngine", () => {
       runtimePack: root,
       workerPath,
       modelDir: root,
+      offlineModelDir: root,
+      vadModelDir: root,
     });
 
     await expect(engine.warm()).resolves.toBeUndefined();
