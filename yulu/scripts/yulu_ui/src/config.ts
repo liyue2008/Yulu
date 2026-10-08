@@ -126,6 +126,10 @@ export const ConfigSchema = z.object({
       realtime_enabled: z.boolean().default(false),
       status_window_enabled: z.boolean().default(false),
     }).passthrough().default({}),
+    local: z.object({
+      final_model: z.enum(["fire-red", "paraformer-replay"]).default("fire-red"),
+      offline_threads: z.number().int().min(1).max(8).optional(),
+    }).passthrough().default({}),
   }).passthrough().default({}),
   llm: z.object({
     enabled: z.boolean().optional(),

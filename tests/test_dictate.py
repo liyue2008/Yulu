@@ -1988,7 +1988,7 @@ def test_transcribe_dictation_preserves_fractional_timeout(monkeypatch, tmp_path
 
     assert abs(observed["timeout_sec"] - 1.55) < 0.001
     assert observed["path"] == "/api/agent/transcribe"
-    assert observed["payload"] == {"audioPath": str(audio), "language": "en"}
+    assert observed["payload"] == {"audioPath": str(audio), "language": "en", "tier": "fast"}
     assert result["text"] == "ok"
     assert result["engine_used"] == "hermes"
     assert result["provider"] == "hermes"
@@ -2789,7 +2789,7 @@ def test_process_audio_round_trips_through_host_hermes_endpoint(monkeypatch, tmp
     assert result["copied"] is False
     assert result["pasted"] is False
     assert observed["url"] == "http://127.0.0.1:7777/api/agent/transcribe"
-    assert observed["body"] == {"audioPath": str(audio), "language": "en"}
+    assert observed["body"] == {"audioPath": str(audio), "language": "en", "tier": "fast"}
     assert observed["headers"]["authorization"] == "Bearer secret-token"
     assert observed["headers"]["content-type"] == "application/json"
     assert observed["timeout"] == 3.0

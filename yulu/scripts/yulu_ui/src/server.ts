@@ -58,6 +58,7 @@ import { XaiAudioClient } from "./xaiAudio.js";
 import { hasCurrentXaiTranscriptionConsent } from "./transcriptionConsent.js";
 import { XaiTextClient } from "./xaiText.js";
 import { AudioTranscriptionService } from "./audioTranscription.js";
+import { OfflineTranscriptionService } from "./offlineTranscription.js";
 import { createXaiProviderReadiness } from "./routers/providers.js";
 import { AgentConnectionCenter } from "./agentConnections.js";
 import { discoverAgentConnectionCandidates } from "./agentConnectionDiscovery.js";
@@ -272,6 +273,14 @@ async function startLockedServer(
     legacyModelsDir: join(runtimePaths.legacyReadOnlyDataDir, "models"),
     selected: () => configManager.read().transcription.engine === "local",
   });
+  const offlineTranscription = new OfflineTranscriptionService({
+    scriptDir: runtimePaths.scriptDir,
+    configDir: runtimePaths.durableDataDir,
+    modelsDir: runtimePaths.modelsDir,
+    legacyConfigDir: runtimePaths.legacyReadOnlyDataDir,
+    legacyModelsDir: join(runtimePaths.legacyReadOnlyDataDir, "models"),
+    config: configManager,
+  });
   const nativeHelperDir = process.env.YULU_NATIVE_HELPER_DIR?.trim() || undefined;
   const nativeHelpers = nativeHelperDir
     ? requireNativeHelpers({ scriptDir: runtimePaths.scriptDir, nativeHelperDir })
@@ -296,6 +305,7 @@ async function startLockedServer(
     xaiAudio,
     () => hasCurrentXaiTranscriptionConsent(hostStore),
     () => loadGlossaryContract(dbProxy.vocab),
+    offlineTranscription,
   );
   const agentConnections = new AgentConnectionCenter({
     config: configManager,
@@ -628,6 +638,7 @@ async function startLockedServer(
   const AudioTranscriptionSchema = z.object({
     audioPath: z.string().min(1),
     language: z.enum(["zh", "en", "ja", "auto"]).optional(),
+    tier: z.enum(["final", "fast"]).optional(),
   });
   app.post("/api/agent/transcription/warm", async (c) => {
     if (!isAuthorizedToken(runtimePaths.mcpTokenJson, c.req.header("authorization") ?? "")) {

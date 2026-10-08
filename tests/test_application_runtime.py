@@ -158,6 +158,8 @@ def runtime_fixture(tmp_path: Path) -> tuple[Path, dict[str, str]]:
     write(scripts / "initialize_host_databases.py", b"print('initialize')\n")
     write(scripts / "search/cli.py", b"print('search')\n")
     write(scripts / "config.example.json", b"{}\n")
+    write(scripts / "sherpa_caption_worker.py", b"print('captions')\n")
+    write(scripts / "sherpa_offline_worker.py", b"print('offline')\n")
     write(
         scripts / "local_caption_runtime_pack.json",
         json.dumps(
@@ -275,6 +277,8 @@ def test_prepare_application_runtime_stages_only_core_runtime_and_production_hos
     assert (resources / "runtime/yulu/scripts/application_update.py").is_file()
     assert (resources / "runtime/yulu/scripts/search/cli.py").is_file()
     assert (resources / "runtime/yulu/scripts/local_caption_runtime_pack.json").is_file()
+    assert (resources / "runtime/yulu/scripts/sherpa_caption_worker.py").is_file()
+    assert (resources / "runtime/yulu/scripts/sherpa_offline_worker.py").is_file()
     assert not (resources / "runtime/yulu/scripts/local-caption-model.bin").exists()
     assert not any(path.name.endswith(".onnx") for path in resources.rglob("*"))
 

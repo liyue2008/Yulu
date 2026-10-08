@@ -12,6 +12,8 @@ let sessionActive = false;
 const installLocal = vi.fn();
 const uninstallLocal = vi.fn();
 const testLocal = vi.fn();
+let offlineModelReady = false;
+let vadReady = false;
 
 const schema = [
   { path: "transcription.engine", category: "transcription", label: "音频引擎", type: "select", reload: { kind: "none" } },
@@ -37,6 +39,9 @@ vi.mock("../../web/src/trpc.js", () => ({
         operation: "idle",
         runtimeBytes: localInstalled ? 80_000_000 : 0,
         modelBytes: localInstalled ? 240_000_000 : 0,
+        offlineModelReady,
+        offlineModelBytes: offlineModelReady ? 1_500_000_000 : 0,
+        vadReady,
         sessionActive,
         message: null,
         error: null,
@@ -44,6 +49,7 @@ vi.mock("../../web/src/trpc.js", () => ({
       install: { useMutation: () => ({ mutate: installLocal, isPending: false, error: null }) },
       uninstall: { useMutation: () => ({ mutate: uninstallLocal, isPending: false, error: null }) },
       test: { useMutation: () => ({ mutate: testLocal, isPending: false, error: null }) },
+      testOffline: { useMutation: () => ({ mutate: testLocal, isPending: false, error: null, isSuccess: false }) },
     },
     providers: {
       status: { useQuery: () => ({ data: {
@@ -96,7 +102,9 @@ beforeEach(() => {
   installLocal.mockClear();
   uninstallLocal.mockClear();
   testLocal.mockClear();
-  vi.spyOn(window, "confirm").mockReturnValue(true);
+  offlineModelReady = false;
+  vadReady = false;
+  vi.spyOn(window, "confirm").mockReturnValue(true).mockClear();
   vi.spyOn(window, "open").mockReturnValue({ opener: null, close: vi.fn(), location: { href: "" } } as never);
 });
 
@@ -180,5 +188,25 @@ describe("TranscriptionSection", () => {
     expect(screen.getByText("Not tested")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Open AI Providers" })).toHaveAttribute("href", "/settings/connections?connection=direct-xai&capability=transcription#ai-connections");
     expect(screen.queryByText("需要在 Yulu 中连接 xAI")).toBeNull();
+  });
+
+  it("starts offline model installation scoped to the offline-final asset", async () => {
+    mount();
+    expect(screen.getByText("离线高质量转录模型")).toBeInTheDocument();
+    await userEvent.setup().click(screen.getByRole("button", { name: "安装离线模型" }));
+    expect(installLocal).toHaveBeenCalledWith({ model: "offline-final" });
+    expect(installLocal).toHaveBeenCalledOnce();
+  });
+
+  it("tests the offline model after installation and confirms scoped uninstall", async () => {
+    offlineModelReady = true;
+    vadReady = true;
+    mount();
+    await userEvent.setup().click(screen.getByText("模型维护"));
+    await userEvent.setup().click(screen.getAllByRole("button", { name: "测试模型" }).at(-1)!);
+    expect(testLocal).toHaveBeenCalledOnce();
+    await userEvent.setup().click(screen.getAllByRole("button", { name: "卸载" }).at(-1)!);
+    expect(window.confirm).toHaveBeenCalledOnce();
+    expect(uninstallLocal).toHaveBeenCalledWith({ model: "offline-final" });
   });
 });

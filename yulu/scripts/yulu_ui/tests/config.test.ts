@@ -83,6 +83,43 @@ describe("ConfigManager", () => {
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 
+  it("defaults offline final transcription settings", () => {
+    const dir = mkdtempSync(join(tmpdir(), "yulu_offline_default_"));
+    const path = join(dir, "config.json");
+    fs.writeFileSync(path, JSON.stringify({ audio: { output_dir: "~/Movies/Yulu" }, transcription: {} }));
+    try {
+      const cfg = new ConfigManager(path).read();
+      expect(cfg.transcription.local.final_model).toBe("fire-red");
+      expect(cfg.transcription.local.offline_threads).toBeUndefined();
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it("validates final_model and offline_threads", () => {
+    const dir = mkdtempSync(join(tmpdir(), "yulu_offline_invalid_"));
+    const path = join(dir, "config.json");
+    try {
+      fs.writeFileSync(path, JSON.stringify({
+        audio: { output_dir: "~/Movies/Yulu" },
+        transcription: { local: { final_model: "whisper" } },
+      }));
+      expect(() => new ConfigManager(path).read()).toThrow(ZodError);
+
+      fs.writeFileSync(path, JSON.stringify({
+        audio: { output_dir: "~/Movies/Yulu" },
+        transcription: { local: { offline_threads: 0 } },
+      }));
+      expect(() => new ConfigManager(path).read()).toThrow(ZodError);
+
+      fs.writeFileSync(path, JSON.stringify({
+        audio: { output_dir: "~/Movies/Yulu" },
+        transcription: { local: { final_model: "paraformer-replay", offline_threads: 4 } },
+      }));
+      const cfg = new ConfigManager(path).read();
+      expect(cfg.transcription.local.final_model).toBe("paraformer-replay");
+      expect(cfg.transcription.local.offline_threads).toBe(4);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
   it("archives and migrates retired Yulu connector configuration", () => {
     const dir = mkdtempSync(join(tmpdir(), "yulu_connector_migration_"));
     const path = join(dir, "config.json");

@@ -48,6 +48,8 @@ REQUIRED_FILES=(
   "Contents/Resources/runtime/yulu/scripts/application_update.py"
   "Contents/Resources/runtime/yulu/scripts/initialize_host_databases.py"
   "Contents/Resources/runtime/yulu/scripts/local_caption_runtime_pack.json"
+  "Contents/Resources/runtime/yulu/scripts/sherpa_caption_worker.py"
+  "Contents/Resources/runtime/yulu/scripts/sherpa_offline_worker.py"
   "Contents/Resources/Sparkle-LICENSE.txt"
   "Contents/Frameworks/Sparkle.framework/Versions/Current/Sparkle"
   "Contents/Frameworks/Sparkle.framework/Versions/Current/Autoupdate"
@@ -334,6 +336,9 @@ if [[ "${YULU_SKIP_RUNTIME_EXECUTION:-0}" != "1" ]]; then
     fail "bundled Python identity does not match runtime inventory: $PYTHON_PROBE"
   "$PYTHON" -I -S -B "$RUNTIME/yulu/scripts/local_caption_runtime.py" --help >/dev/null || \
     fail "bundled Python cannot start the local caption installer in isolated mode"
+  "$PYTHON" -I -S -B -c 'import ast,sys; ast.parse(open(sys.argv[1], encoding="utf-8").read())' \
+    "$RUNTIME/yulu/scripts/sherpa_offline_worker.py" || \
+    fail "bundled Python cannot parse the offline transcription worker"
   set +o pipefail
   FFMPEG_FIRST_LINE="$("$FFMPEG" -hide_banner -version 2>&1 | head -1)"
   set -o pipefail

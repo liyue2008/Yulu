@@ -407,3 +407,148 @@ def test_sherpa_import_probe_preserves_runtime_pack_bytes(monkeypatch, tmp_path)
     }
     assert after == before
     assert not list(site_packages.rglob("__pycache__"))
+
+
+def test_model_registry_pins_streaming_final_and_vad_assets():
+    assert set(runtime.MODELS) == {"streaming", "offline-final", "silero-vad"}
+    final = runtime.MODELS["offline-final"]
+    assert final.sha256 and len(final.sha256) == 64
+    assert set(final.files) == {"tokens.txt", "encoder.int8.onnx", "decoder.int8.onnx"}
+    assert final.url.endswith(".tar.bz2")
+    vad = runtime.MODELS["silero-vad"]
+    assert vad.files == ("silero_vad.onnx",)
+    assert vad.url.endswith("/silero_vad.onnx")
+    # Only the streaming caption model and VAD install by default; the ~1.4 GB
+    # final-transcription model stays an explicit opt-in.
+    assert runtime.DEFAULT_INSTALL_MODELS == ("streaming", "silero-vad")
+
+
+def test_status_reports_per_model_readiness(tmp_path):
+    current = runtime.status(tmp_path)
+    assert current["offlineFinalReady"] is False
+    assert current["vadReady"] is False
+    models = current["models"]
+    assert set(models) == set(runtime.MODELS)
+    assert models["offline-final"]["provider"] == "sherpa-onnx-fire-red-asr-large-int8"
+    assert models["streaming"]["provider"] == "sherpa-onnx-paraformer-int8"
+    assert models["silero-vad"]["provider"] == "silero-vad"
+    assert models["offline-final"]["archiveBytes"] > models["streaming"]["archiveBytes"]
+
+
+def test_install_and_uninstall_scope_to_a_single_model(monkeypatch, tmp_path):
+    downloaded = []
+
+    def fake_download(asset, target):
+        downloaded.append(asset.key)
+        target.mkdir(parents=True, exist_ok=True)
+        for name in asset.files:
+            (target / name).write_bytes(b"")
+
+    monkeypatch.setattr(runtime, "_load_runtime_pack_definition", lambda: {"id": "test-pack"})
+    monkeypatch.setattr(runtime, "_install_runtime_pack", lambda runtime_dir, definition: None)
+    monkeypatch.setattr(runtime, "_download_asset", fake_download)
+    monkeypatch.setattr(runtime, "_verify_model_hashes",
+                        lambda directory, asset=None: all(
+                            (directory / name).is_file()
+                            for name in (asset or runtime.MODELS["streaming"]).files
+                        ))
+    monkeypatch.setattr(runtime, "_sherpa_import_ok", lambda *args, **kwargs: False)
+
+    result = runtime.install(tmp_path, models_dir=tmp_path / "Models", model="silero-vad")
+    assert downloaded == ["silero-vad"]
+    assert result["models"]["silero-vad"]["ready"] is True
+
+    runtime.uninstall(tmp_path, models_dir=tmp_path / "Models", model="silero-vad")
+    gone = runtime.status(tmp_path, models_dir=tmp_path / "Models")
+    assert gone["vadReady"] is False
+    assert not (tmp_path / "Models" / "silero-vad").exists()
+
+
+def test_cli_rejects_unknown_model_flag():
+    with pytest.raises(SystemExit) as excinfo:
+        runtime.main(["install", "--model", "gpt-5"])
+    assert excinfo.value.code == 2
+
+
+def _fake_file_asset(payload: bytes) -> runtime.ModelAsset:
+    digest = hashlib.sha256(payload).hexdigest()
+    return runtime.ModelAsset(
+        key="fake",
+        name="fake",
+        url="https://example.invalid/fake.onnx",
+        sha256=digest,
+        files=("fake.onnx",),
+        file_sha256={"fake.onnx": digest},
+        kind="file",
+        archive_bytes=len(payload),
+        installed_bytes=len(payload),
+    )
+
+
+def test_download_asset_replaces_previous_model_without_leaving_residue(monkeypatch, tmp_path):
+    payload = b"new-model"
+    asset = _fake_file_asset(payload)
+    monkeypatch.setattr(
+        runtime.urllib.request, "urlretrieve",
+        lambda url, dest, reporthook=None: Path(dest).write_bytes(payload),
+    )
+    model_dir = tmp_path / "Models" / "fake"
+    model_dir.mkdir(parents=True)
+    (model_dir / "fake.onnx").write_bytes(b"previous-good")
+
+    runtime._download_asset(asset, model_dir)
+
+    assert (model_dir / "fake.onnx").read_bytes() == payload
+    assert not model_dir.with_name(".fake.previous").exists()
+
+
+def test_download_asset_restores_previous_model_when_publish_fails(monkeypatch, tmp_path):
+    payload = b"new-model"
+    asset = _fake_file_asset(payload)
+    monkeypatch.setattr(
+        runtime.urllib.request, "urlretrieve",
+        lambda url, dest, reporthook=None: Path(dest).write_bytes(payload),
+    )
+
+    def boom(src, dst):
+        raise OSError("disk on fire")
+
+    monkeypatch.setattr(runtime.shutil, "move", boom)
+    model_dir = tmp_path / "Models" / "fake"
+    model_dir.mkdir(parents=True)
+    (model_dir / "fake.onnx").write_bytes(b"previous-good")
+
+    with pytest.raises(RuntimeError, match="本地模型发布失败"):
+        runtime._download_asset(asset, model_dir)
+
+    assert (model_dir / "fake.onnx").read_bytes() == b"previous-good"
+    assert not list((tmp_path / "Models").glob(".fake*"))
+
+
+def test_download_asset_restores_previous_model_when_post_publish_verification_fails(
+    monkeypatch, tmp_path,
+):
+    payload = b"new-model"
+    asset = _fake_file_asset(payload)
+    monkeypatch.setattr(
+        runtime.urllib.request, "urlretrieve",
+        lambda url, dest, reporthook=None: Path(dest).write_bytes(payload),
+    )
+    real_verify = runtime._verify_model_hashes
+    calls: list[Path] = []
+
+    def flaky_verify(directory, model_asset=None):
+        calls.append(directory)
+        # Fail the post-publish check (the second invocation) only.
+        return real_verify(directory, model_asset) and len(calls) < 2
+
+    monkeypatch.setattr(runtime, "_verify_model_hashes", flaky_verify)
+    model_dir = tmp_path / "Models" / "fake"
+    model_dir.mkdir(parents=True)
+    (model_dir / "fake.onnx").write_bytes(b"previous-good")
+
+    with pytest.raises(RuntimeError, match="模型发布后校验失败"):
+        runtime._download_asset(asset, model_dir)
+
+    assert (model_dir / "fake.onnx").read_bytes() == b"previous-good"
+    assert not list((tmp_path / "Models").glob(".fake*"))

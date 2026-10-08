@@ -93,6 +93,8 @@ export const SETTINGS: SettingDef[] = [
   // recording start/stop, so changes apply without a daemon reload.
   { path: "transcription.captions.realtime_enabled",  category: "transcription", label: "会议实时字幕", type: "toggle", validate: z.boolean(), reload: R.none },
   { path: "transcription.captions.status_window_enabled", category: "transcription", label: "录制状态浮窗", type: "toggle", validate: z.boolean(), reload: R.none },
+  { path: "transcription.local.final_model", category: "transcription", label: "最终转录模型", type: "select", validate: z.enum(["fire-red", "paraformer-replay"]), reload: R.none },
+  { path: "transcription.local.offline_threads", category: "transcription", label: "离线转写线程数", type: "number", validate: z.number().int().min(1).max(8), reload: R.none, advanced: true },
   { path: "llm.enabled",                 category: "llm", label: "启用 LLM",       type: "toggle",  validate: z.boolean(),                 reload: R.none, hidden: true },
   { path: "llm.command",                 category: "llm", label: "LLM 后端",       type: "preset",  validate: z.array(z.string()).nullable(), reload: R.none, hidden: true },
   { path: "llm.agent.provider",          category: "llm", label: "Agent provider", type: "select",  validate: z.enum(["auto", "codex", "claude", "claude-code", "hermes", "openclaw"]), reload: R.none, hidden: true },

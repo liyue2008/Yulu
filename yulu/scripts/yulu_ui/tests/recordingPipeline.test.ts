@@ -166,6 +166,8 @@ describe("RecordingPipeline", () => {
       _audioPath: string,
       language: "zh" | "en" | "ja" | "auto",
       _glossary?: unknown,
+      _tier?: "final" | "fast",
+      _onProgress?: (progress: { phase: string; message: string }) => void,
     ) => {
       if (opts.transcribeContractGate) await opts.transcribeContractGate;
       if (opts.transcribeUnavailable) throw new AgentUnavailableError("selected audio engine unavailable");
@@ -545,6 +547,8 @@ describe("RecordingPipeline", () => {
       realpathSync(setupResult.audioPath),
       "zh",
       expect.objectContaining({ prompt: expect.stringContaining("阿尔法学院") }),
+      "final",
+      expect.any(Function),
     );
     expect(setupResult.runArtifactWorkflow).toHaveBeenCalledWith(expect.objectContaining({
       glossary: expect.objectContaining({ summaryInstruction: expect.stringContaining("阿法学院 => 阿尔法学院") }),
@@ -1654,12 +1658,14 @@ describe("RecordingPipeline", () => {
       realpathSync(setupResult.audioPath),
       "zh",
       expect.objectContaining({ prompt: expect.stringContaining("玉录") }),
+      "final",
     );
     expect(setupResult.transcribe).toHaveBeenNthCalledWith(
       2,
       realpathSync(dictationWav),
       "ja",
       expect.objectContaining({ prompt: expect.stringContaining("玉录") }),
+      "final",
     );
   });
 
@@ -1683,5 +1689,37 @@ describe("RecordingPipeline", () => {
 
     await expect(pipeline!.transcribeOnDemand({ audioPath: setupResult.audioPath })).rejects.toThrow("selected audio engine failed");
     expect(setupResult.gatewayFactory).not.toHaveBeenCalled();
+  });
+
+  it("passes the requested transcription tier through to the audio service", async () => {
+    const setupResult = setup();
+    setupResult.transcribe.mockImplementation(async (_audioPath: string, language: "zh" | "en" | "ja" | "auto") => ({
+      transcript: "快速结果",
+      provider: "test-audio",
+      chunks: 1,
+      language,
+    }));
+
+    await pipeline!.transcribeOnDemand({ audioPath: setupResult.audioPath, tier: "fast" });
+
+    const call = setupResult.transcribe.mock.calls[0]!;
+    expect(call[0]).toBe(realpathSync(setupResult.audioPath));
+    expect(call[1]).toBe("zh");
+    expect(call[3]).toBe("fast");
+  });
+
+  it("fails an automatic task visibly when the offline final model is missing", async () => {
+    const setupResult = setup({ pollMs: 5 });
+    setupResult.transcribe.mockRejectedValue(new AgentUnavailableError(
+      "离线高质量模型未安装：请到设置安装离线高质量转录模型，或把 transcription.local.final_model 改为 paraformer-replay",
+    ));
+    writeFileSync(setupResult.audioPath, wavWithAudio());
+
+    const { task } = pipeline!.enqueueCompletion({ audioPath: setupResult.audioPath, title: "Demo" });
+
+    await vi.waitFor(() => expect(store!.getTask(task.id)?.state).toBe("failed"));
+    expect(store!.getTask(task.id)?.error).toContain("离线高质量模型未安装");
+    expect(setupResult.transcribe).toHaveBeenCalledTimes(3);
+    await pipeline!.close?.();
   });
 });

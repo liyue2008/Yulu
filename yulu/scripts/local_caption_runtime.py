@@ -26,19 +26,94 @@ if __name__ == "__main__":
 
 from application_paths import DURABLE_DATA_DIR, MODELS_DIR
 
-MODEL_NAME = "sherpa-onnx-streaming-paraformer-bilingual-zh-en"
-MODEL_URL = (
-    "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/"
-    f"{MODEL_NAME}.tar.bz2"
-)
-MODEL_SHA256 = "5462a1fce42693deae572af1e8c4687124b12aa85fe61ff4d3168bb5280e205f"
 SHERPA_VERSION = "1.13.2"
-MODEL_FILES = ("tokens.txt", "encoder.int8.onnx", "decoder.int8.onnx")
-MODEL_FILE_SHA256 = {
-    "tokens.txt": "59aba8873a2ed1e122c25fee421e25f283b63290efbde85c1f01a853d83cb6e6",
-    "encoder.int8.onnx": "81a70226a8934e6ed92aa1d4fc486b428b5398e2f2619ed4897b7294cab90e9a",
-    "decoder.int8.onnx": "f3cca9f77bb9d93c8fcbfb63ae617b6b1ee96818df3aa3b151c40658fe38594f",
+
+
+class ModelAsset:
+    """A downloadable model asset managed by the local caption runtime."""
+
+    def __init__(
+        self,
+        *,
+        key: str,
+        name: str,
+        url: str,
+        sha256: str,
+        files: tuple[str, ...],
+        file_sha256: dict[str, str],
+        kind: str,
+        archive_bytes: int,
+        installed_bytes: int,
+    ) -> None:
+        self.key = key
+        self.name = name
+        self.url = url
+        self.sha256 = sha256
+        self.files = files
+        self.file_sha256 = file_sha256
+        self.kind = kind  # "tarbz2" (archive with top-level dir == name) or "file" (bare onnx)
+        self.archive_bytes = archive_bytes
+        self.installed_bytes = installed_bytes
+
+
+MODELS: dict[str, ModelAsset] = {
+    "streaming": ModelAsset(
+        key="streaming",
+        name="sherpa-onnx-streaming-paraformer-bilingual-zh-en",
+        url=(
+            "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/"
+            "sherpa-onnx-streaming-paraformer-bilingual-zh-en.tar.bz2"
+        ),
+        sha256="5462a1fce42693deae572af1e8c4687124b12aa85fe61ff4d3168bb5280e205f",
+        files=("tokens.txt", "encoder.int8.onnx", "decoder.int8.onnx"),
+        file_sha256={
+            "tokens.txt": "59aba8873a2ed1e122c25fee421e25f283b63290efbde85c1f01a853d83cb6e6",
+            "encoder.int8.onnx": "81a70226a8934e6ed92aa1d4fc486b428b5398e2f2619ed4897b7294cab90e9a",
+            "decoder.int8.onnx": "f3cca9f77bb9d93c8fcbfb63ae617b6b1ee96818df3aa3b151c40658fe38594f",
+        },
+        kind="tarbz2",
+        archive_bytes=252_000_000,
+        installed_bytes=238_000_000,
+    ),
+    "offline-final": ModelAsset(
+        key="offline-final",
+        name="sherpa-onnx-fire-red-asr-large-zh_en-2025-02-16",
+        url=(
+            "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/"
+            "sherpa-onnx-fire-red-asr-large-zh_en-2025-02-16.tar.bz2"
+        ),
+        sha256="1b158e9d46715ed1cd387402b125de26f2e09bf2cb73926414b7fbd74d1973e2",
+        files=("tokens.txt", "encoder.int8.onnx", "decoder.int8.onnx"),
+        file_sha256={
+            "tokens.txt": "6907215aeb034f6926b26bf8abfd650f756781622480a2342ec1f29b2072cafe",
+            "encoder.int8.onnx": "e60cfef737a0ea324846a64eca8b9dae35898f353f4e34b62ad7e536e2d86add",
+            "decoder.int8.onnx": "c08b9d0297ed17ad84087085e27a4adedcc4e8b3ef14770369f1665681cc507d",
+        },
+        kind="tarbz2",
+        archive_bytes=1_469_513_701,
+        installed_bytes=1_738_971_645,
+    ),
+    "silero-vad": ModelAsset(
+        key="silero-vad",
+        name="silero-vad",
+        url="https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx",
+        sha256="9e2449e1087496d8d4caba907f23e0bd3f78d91fa552479bb9c23ac09cbb1fd6",
+        files=("silero_vad.onnx",),
+        file_sha256={
+            "silero_vad.onnx": "9e2449e1087496d8d4caba907f23e0bd3f78d91fa552479bb9c23ac09cbb1fd6",
+        },
+        kind="file",
+        archive_bytes=643_854,
+        installed_bytes=643_854,
+    ),
 }
+
+MODEL_NAME = MODELS["streaming"].name  # legacy alias: the streaming model directory
+MODEL_URL = MODELS["streaming"].url
+MODEL_SHA256 = MODELS["streaming"].sha256
+MODEL_FILES = MODELS["streaming"].files
+MODEL_FILE_SHA256 = MODELS["streaming"].file_sha256
+DEFAULT_INSTALL_MODELS = ("streaming", "silero-vad")
 PACK_DEFINITION_PATH = Path(__file__).with_name("local_caption_runtime_pack.json")
 
 
@@ -56,24 +131,30 @@ def runtime_paths(config_dir: Path, *, models_dir: Path | None = None) -> dict[s
     runtime = config_dir / "local-caption"
     pack = runtime / "YuluLocalCaptionRuntime.bundle"
     model_root = models_dir or config_dir / "models"
-    return {
+    paths: dict[str, Path] = {
         "runtime": runtime,
         "pack": pack,
         "site_packages": pack / "Contents" / "Resources" / "site-packages",
         "python": Path(os.environ.get("YULU_PYTHON", sys.executable)).resolve(),
-        "model": model_root / MODEL_NAME,
         "manifest": runtime / "manifest.json",
+        "model_root": model_root,
     }
+    for asset in MODELS.values():
+        paths[f"model_{asset.key}"] = model_root / asset.name
+    paths["model"] = paths["model_streaming"]
+    return paths
 
 
-def _model_complete(model_dir: Path) -> bool:
-    return all((model_dir / name).is_file() and (model_dir / name).stat().st_size > 0 for name in MODEL_FILES)
+def _model_complete(model_dir: Path, asset: ModelAsset | None = None) -> bool:
+    asset = asset or MODELS["streaming"]
+    return all((model_dir / name).is_file() and (model_dir / name).stat().st_size > 0 for name in asset.files)
 
 
-def _verify_model_hashes(model_dir: Path) -> bool:
-    if not _model_complete(model_dir):
+def _verify_model_hashes(model_dir: Path, asset: ModelAsset | None = None) -> bool:
+    asset = asset or MODELS["streaming"]
+    if not _model_complete(model_dir, asset):
         return False
-    for name, expected in MODEL_FILE_SHA256.items():
+    for name, expected in asset.file_sha256.items():
         digest = hashlib.sha256()
         with (model_dir / name).open("rb") as source:
             for chunk in iter(lambda: source.read(1024 * 1024), b""):
@@ -296,6 +377,21 @@ def status(config_dir: Path, *, models_dir: Path | None = None) -> dict[str, Any
         pack_ok = False
     runtime_ok = pack_ok and _sherpa_import_ok(paths["python"], paths["site_packages"])
     model_ok = _verify_model_hashes(paths["model"])
+    models: dict[str, dict[str, Any]] = {}
+    for asset in MODELS.values():
+        directory = paths[f"model_{asset.key}"]
+        models[asset.key] = {
+            "ready": _verify_model_hashes(directory, asset),
+            "bytes": _dir_size(directory),
+            "name": asset.name,
+            "provider": (
+                "sherpa-onnx-fire-red-asr-large-int8"
+                if asset.key == "offline-final"
+                else "sherpa-onnx-paraformer-int8" if asset.key == "streaming" else "silero-vad"
+            ),
+            "archiveBytes": asset.archive_bytes,
+            "installedBytes": asset.installed_bytes,
+        }
     return {
         "installed": runtime_ok and model_ok,
         "runtimeReady": runtime_ok,
@@ -309,6 +405,10 @@ def status(config_dir: Path, *, models_dir: Path | None = None) -> dict[str, Any
         "pythonPath": str(paths["site_packages"]),
         "runtimePack": str(paths["pack"]),
         "modelDir": str(paths["model"]),
+        "offlineFinalReady": models["offline-final"]["ready"],
+        "offlineFinalBytes": models["offline-final"]["bytes"],
+        "vadReady": models["silero-vad"]["ready"],
+        "models": models,
     }
 
 
@@ -444,20 +544,32 @@ def _install_runtime_pack(runtime_dir: Path, definition: dict[str, Any]) -> None
         _remove_tree(backup)
 
 
-def _copy_benchmark_model(model_dir: Path) -> bool:
-    source = Path.home() / ".cache/yulu-asr-benchmark/models" / MODEL_NAME
-    if not _verify_model_hashes(source):
+def _copy_benchmark_model(model_dir: Path, asset: ModelAsset) -> bool:
+    source = Path.home() / ".cache/yulu-asr-benchmark/models" / asset.name
+    if not _verify_model_hashes(source, asset):
         return False
     model_dir.mkdir(parents=True, exist_ok=True)
-    for name in MODEL_FILES:
+    for name in asset.files:
         shutil.copy2(source / name, model_dir / name)
     return True
 
 
-def _download_model(model_dir: Path) -> None:
+def _ensure_disk_space(asset: ModelAsset, destination_root: Path) -> None:
+    destination_root.mkdir(parents=True, exist_ok=True)
+    usage = shutil.disk_usage(destination_root)
+    needed = asset.archive_bytes + asset.installed_bytes
+    if usage.free < needed:
+        raise RuntimeError(
+            f"磁盘空间不足：安装 {asset.name} 约需 {needed / 1_000_000_000:.1f} GB（含下载缓存），"
+            f"当前可用 {usage.free / 1_000_000_000:.1f} GB"
+        )
+
+
+def _download_asset(asset: ModelAsset, model_dir: Path) -> None:
+    _ensure_disk_space(asset, model_dir.parent)
     model_dir.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="yulu-caption-model-") as temp:
-        archive = Path(temp) / f"{MODEL_NAME}.tar.bz2"
+        archive = Path(temp) / (f"{asset.name}.tar.bz2" if asset.kind == "tarbz2" else asset.files[0])
         last_percent = -1
 
         def progress(blocks: int, block_size: int, total: int) -> None:
@@ -470,7 +582,7 @@ def _download_model(model_dir: Path) -> None:
                 _emit("progress", phase="download", percent=percent, message=f"下载模型 {percent}%")
 
         urllib.request.urlretrieve(  # noqa: S310 -- fixed HTTPS model URL
-            MODEL_URL,
+            asset.url,
             archive,
             progress,
         )
@@ -479,40 +591,75 @@ def _download_model(model_dir: Path) -> None:
             for chunk in iter(lambda: archive_source.read(1024 * 1024), b""):
                 digest_state.update(chunk)
         digest = digest_state.hexdigest()
-        if digest != MODEL_SHA256:
-            raise RuntimeError(f"模型校验失败: expected {MODEL_SHA256}, got {digest}")
+        if digest != asset.sha256:
+            raise RuntimeError(f"模型校验失败: expected {asset.sha256}, got {digest}")
         staging = Path(temp) / "model"
         staging.mkdir()
-        with tarfile.open(archive, "r:bz2") as bundle:
-            members = {member.name: member for member in bundle.getmembers()}
-            for name in MODEL_FILES:
-                member_name = f"{MODEL_NAME}/{name}"
-                member = members.get(member_name)
-                if member is None or not member.isfile():
-                    raise RuntimeError(f"模型包缺少 {member_name}")
-                member_source = bundle.extractfile(member)
-                if member_source is None:
-                    raise RuntimeError(f"无法读取 {member_name}")
-                with member_source, (staging / name).open("wb") as target:
-                    shutil.copyfileobj(member_source, target)
-        if not _verify_model_hashes(staging):
-            raise RuntimeError("解压后的 INT8 模型校验失败")
-        _remove_tree(model_dir)
+        if asset.kind == "file":
+            shutil.copy2(archive, staging / asset.files[0])
+        else:
+            with tarfile.open(archive, "r:bz2") as bundle:
+                members = {member.name: member for member in bundle.getmembers()}
+                for name in asset.files:
+                    member_name = f"{asset.name}/{name}"
+                    member = members.get(member_name)
+                    if member is None or not member.isfile():
+                        raise RuntimeError(f"模型包缺少 {member_name}")
+                    member_source = bundle.extractfile(member)
+                    if member_source is None:
+                        raise RuntimeError(f"无法读取 {member_name}")
+                    with member_source, (staging / name).open("wb") as target:
+                        shutil.copyfileobj(member_source, target)
+        if not _verify_model_hashes(staging, asset):
+            raise RuntimeError("解压后的模型校验失败")
+        # Safe replace: move the previous install aside first, publish the new
+        # model, and only delete the old tree after the new one is verified in
+        # place. Any failure restores the previous install instead of leaving
+        # the target deleted-but-not-replaced.
+        backup = model_dir.with_name(f".{model_dir.name}.previous")
+        _remove_tree(backup)
+        had_previous = model_dir.exists()
+        if had_previous:
+            os.replace(model_dir, backup)
+
+        def _restore_previous() -> None:
+            _remove_tree(model_dir)
+            if had_previous and backup.exists():
+                os.replace(backup, model_dir)
+
         try:
-            shutil.move(str(staging), str(model_dir))
-        except OSError as exc:
-            raise RuntimeError("本地模型发布失败") from exc
+            try:
+                shutil.move(str(staging), str(model_dir))
+            except OSError as exc:
+                raise RuntimeError("本地模型发布失败") from exc
+            if not _verify_model_hashes(model_dir, asset):
+                raise RuntimeError("模型发布后校验失败")
+        except Exception:
+            _restore_previous()
+            raise
+        _remove_tree(backup)
 
 
-def install(config_dir: Path, *, models_dir: Path | None = None) -> dict[str, Any]:
+def install(
+    config_dir: Path,
+    *,
+    models_dir: Path | None = None,
+    model: str | None = None,
+) -> dict[str, Any]:
     paths = runtime_paths(config_dir, models_dir=models_dir)
     paths["runtime"].mkdir(parents=True, exist_ok=True)
     definition = _load_runtime_pack_definition()
     _install_runtime_pack(paths["runtime"], definition)
-    if not _verify_model_hashes(paths["model"]):
-        _emit("progress", phase="model", message="准备 INT8 中英双语模型")
-        if not _copy_benchmark_model(paths["model"]):
-            _download_model(paths["model"])
+    selected = list(DEFAULT_INSTALL_MODELS) if model is None else [model]
+    for key in selected:
+        asset = MODELS[key]
+        target = paths[f"model_{asset.key}"]
+        if _verify_model_hashes(target, asset):
+            continue
+        _emit("progress", phase="model", message=f"准备 {asset.name}")
+        if asset.key == "streaming" and _copy_benchmark_model(target, asset):
+            continue
+        _download_asset(asset, target)
     manifest = {
         "schema": 1,
         "provider": "sherpa-onnx-paraformer-int8",
@@ -520,18 +667,35 @@ def install(config_dir: Path, *, models_dir: Path | None = None) -> dict[str, An
         "model": MODEL_NAME,
         "modelSha256": MODEL_SHA256,
         "runtimePack": definition["id"],
+        "models": {
+            asset.key: {"name": asset.name, "sha256": asset.sha256}
+            for asset in MODELS.values()
+            if _verify_model_hashes(paths[f"model_{asset.key}"], asset)
+        },
     }
     paths["manifest"].write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     result = status(config_dir, models_dir=models_dir)
-    if not result["installed"]:
+    for key in selected:
+        if not result["models"][key]["ready"]:
+            raise RuntimeError(f"模型 {MODELS[key].name} 安装后未通过自检")
+    if "streaming" in selected and not result["installed"]:
         raise RuntimeError("本地实时转录运行时安装后未通过自检")
     return result
 
 
-def uninstall(config_dir: Path, *, models_dir: Path | None = None) -> dict[str, Any]:
+def uninstall(
+    config_dir: Path,
+    *,
+    models_dir: Path | None = None,
+    model: str | None = None,
+) -> dict[str, Any]:
     paths = runtime_paths(config_dir, models_dir=models_dir)
-    _remove_tree(paths["runtime"])
-    _remove_tree(paths["model"])
+    if model is None:
+        _remove_tree(paths["runtime"])
+        for asset in MODELS.values():
+            _remove_tree(paths[f"model_{asset.key}"])
+    else:
+        _remove_tree(paths[f"model_{model}"])
     return status(config_dir, models_dir=models_dir)
 
 
@@ -540,14 +704,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("action", choices=("status", "install", "uninstall"))
     parser.add_argument("--config-dir", type=Path, default=DURABLE_DATA_DIR)
     parser.add_argument("--models-dir", type=Path)
+    parser.add_argument("--model", choices=tuple(MODELS), help="限定操作单个模型资产；缺省时安装/卸载全部默认资产")
     args = parser.parse_args(argv)
     config_dir = args.config_dir.expanduser()
     models_dir = args.models_dir.expanduser() if args.models_dir else MODELS_DIR
     try:
         if args.action == "install":
-            result = install(config_dir, models_dir=models_dir)
+            result = install(config_dir, models_dir=models_dir, model=args.model)
         elif args.action == "uninstall":
-            result = uninstall(config_dir, models_dir=models_dir)
+            result = uninstall(config_dir, models_dir=models_dir, model=args.model)
         else:
             result = status(config_dir, models_dir=models_dir)
         _emit("result", ok=True, status=result)

@@ -11,6 +11,22 @@ describe("settingsRegistry", () => {
       expect(d.reload).toBeDefined();
     }
   });
+  it("registers offline final transcription settings without daemon restarts", () => {
+    const finalModel = defFor("transcription.local.final_model");
+    expect(finalModel?.type).toBe("select");
+    expect(finalModel?.validate.safeParse("fire-red").success).toBe(true);
+    expect(finalModel?.validate.safeParse("paraformer-replay").success).toBe(true);
+    expect(finalModel?.validate.safeParse("whisper").success).toBe(false);
+    expect(reloadFor("transcription.local.final_model")).toEqual({ kind: "none" });
+
+    const threads = defFor("transcription.local.offline_threads");
+    expect(threads?.type).toBe("number");
+    expect(threads?.validate.safeParse(4).success).toBe(true);
+    expect(threads?.validate.safeParse(0).success).toBe(false);
+    expect(threads?.validate.safeParse(9).success).toBe(false);
+    expect(threads?.advanced).toBe(true);
+    expect(reloadFor("transcription.local.offline_threads")).toEqual({ kind: "none" });
+  });
   it("language is an audio-engine input and applies without daemon reload", () => {
     const def = defFor("transcription.language");
     expect(def?.type).toBe("select");
