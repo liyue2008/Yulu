@@ -468,3 +468,87 @@ def test_cli_rejects_unknown_model_flag():
     with pytest.raises(SystemExit) as excinfo:
         runtime.main(["install", "--model", "gpt-5"])
     assert excinfo.value.code == 2
+
+
+def _fake_file_asset(payload: bytes) -> runtime.ModelAsset:
+    digest = hashlib.sha256(payload).hexdigest()
+    return runtime.ModelAsset(
+        key="fake",
+        name="fake",
+        url="https://example.invalid/fake.onnx",
+        sha256=digest,
+        files=("fake.onnx",),
+        file_sha256={"fake.onnx": digest},
+        kind="file",
+        archive_bytes=len(payload),
+        installed_bytes=len(payload),
+    )
+
+
+def test_download_asset_replaces_previous_model_without_leaving_residue(monkeypatch, tmp_path):
+    payload = b"new-model"
+    asset = _fake_file_asset(payload)
+    monkeypatch.setattr(
+        runtime.urllib.request, "urlretrieve",
+        lambda url, dest, reporthook=None: Path(dest).write_bytes(payload),
+    )
+    model_dir = tmp_path / "Models" / "fake"
+    model_dir.mkdir(parents=True)
+    (model_dir / "fake.onnx").write_bytes(b"previous-good")
+
+    runtime._download_asset(asset, model_dir)
+
+    assert (model_dir / "fake.onnx").read_bytes() == payload
+    assert not model_dir.with_name(".fake.previous").exists()
+
+
+def test_download_asset_restores_previous_model_when_publish_fails(monkeypatch, tmp_path):
+    payload = b"new-model"
+    asset = _fake_file_asset(payload)
+    monkeypatch.setattr(
+        runtime.urllib.request, "urlretrieve",
+        lambda url, dest, reporthook=None: Path(dest).write_bytes(payload),
+    )
+
+    def boom(src, dst):
+        raise OSError("disk on fire")
+
+    monkeypatch.setattr(runtime.shutil, "move", boom)
+    model_dir = tmp_path / "Models" / "fake"
+    model_dir.mkdir(parents=True)
+    (model_dir / "fake.onnx").write_bytes(b"previous-good")
+
+    with pytest.raises(RuntimeError, match="本地模型发布失败"):
+        runtime._download_asset(asset, model_dir)
+
+    assert (model_dir / "fake.onnx").read_bytes() == b"previous-good"
+    assert not list((tmp_path / "Models").glob(".fake*"))
+
+
+def test_download_asset_restores_previous_model_when_post_publish_verification_fails(
+    monkeypatch, tmp_path,
+):
+    payload = b"new-model"
+    asset = _fake_file_asset(payload)
+    monkeypatch.setattr(
+        runtime.urllib.request, "urlretrieve",
+        lambda url, dest, reporthook=None: Path(dest).write_bytes(payload),
+    )
+    real_verify = runtime._verify_model_hashes
+    calls: list[Path] = []
+
+    def flaky_verify(directory, model_asset=None):
+        calls.append(directory)
+        # Fail the post-publish check (the second invocation) only.
+        return real_verify(directory, model_asset) and len(calls) < 2
+
+    monkeypatch.setattr(runtime, "_verify_model_hashes", flaky_verify)
+    model_dir = tmp_path / "Models" / "fake"
+    model_dir.mkdir(parents=True)
+    (model_dir / "fake.onnx").write_bytes(b"previous-good")
+
+    with pytest.raises(RuntimeError, match="模型发布后校验失败"):
+        runtime._download_asset(asset, model_dir)
+
+    assert (model_dir / "fake.onnx").read_bytes() == b"previous-good"
+    assert not list((tmp_path / "Models").glob(".fake*"))

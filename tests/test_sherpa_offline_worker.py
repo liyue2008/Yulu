@@ -205,6 +205,20 @@ def test_main_rejects_unknown_wav_labels(monkeypatch, tmp_path, capsys):
     assert "SOURCE=PATH" in fatal["fatal"]
 
 
+def test_main_rejects_bad_wav_labels_before_loading_the_model(tmp_path, capsys):
+    # No sherpa_onnx stub and no runtime pack staged: a malformed --wav must
+    # fail fast, before the multi-GB model load.
+    rc = worker.main([
+        "--runtime-pack", str(tmp_path / "p.bundle"),
+        "--model-dir", str(tmp_path / "model"),
+        "--vad-model", str(tmp_path / "silero_vad.onnx"),
+        "--wav", "camera=/nowhere.wav",
+    ])
+    assert rc == 2
+    fatal = json.loads(capsys.readouterr().err.strip().splitlines()[-1])
+    assert "SOURCE=PATH" in fatal["fatal"]
+
+
 def test_main_requires_at_least_one_wav(monkeypatch, tmp_path, capsys):
     sherpa, _ = fake_sherpa_module()
     monkeypatch.setitem(sys.modules, "sherpa_onnx", sherpa)

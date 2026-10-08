@@ -190,12 +190,14 @@ export class AudioTranscriptionService implements StreamingCaptionEngine {
         throw new AgentUnavailableError((error as Error).message);
       }
     }
-    const status = this.local.status();
-    if (!status.ready) throw new AgentUnavailableError(status.error || "本地转写模型尚未安装");
     if (tier === "final" && this.config.read().transcription.local.final_model === "fire-red") {
+      // Final-tier FireRedASR runs on the offline assets only; it must stay
+      // usable when the streaming model is not installed.
       if (!this.offline) throw new AgentUnavailableError("离线高质量转录服务未配置；请改用 paraformer-replay");
       return await this.offline.transcribeFile(audioPath, language, onProgress);
     }
+    const status = this.local.status();
+    if (!status.ready) throw new AgentUnavailableError(status.error || "本地转写模型尚未安装");
     return await this.transcribeLocalFile(audioPath, language);
   }
 

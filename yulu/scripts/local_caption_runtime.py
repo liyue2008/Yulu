@@ -612,11 +612,32 @@ def _download_asset(asset: ModelAsset, model_dir: Path) -> None:
                         shutil.copyfileobj(member_source, target)
         if not _verify_model_hashes(staging, asset):
             raise RuntimeError("解压后的模型校验失败")
-        _remove_tree(model_dir)
+        # Safe replace: move the previous install aside first, publish the new
+        # model, and only delete the old tree after the new one is verified in
+        # place. Any failure restores the previous install instead of leaving
+        # the target deleted-but-not-replaced.
+        backup = model_dir.with_name(f".{model_dir.name}.previous")
+        _remove_tree(backup)
+        had_previous = model_dir.exists()
+        if had_previous:
+            os.replace(model_dir, backup)
+
+        def _restore_previous() -> None:
+            _remove_tree(model_dir)
+            if had_previous and backup.exists():
+                os.replace(backup, model_dir)
+
         try:
-            shutil.move(str(staging), str(model_dir))
-        except OSError as exc:
-            raise RuntimeError("本地模型发布失败") from exc
+            try:
+                shutil.move(str(staging), str(model_dir))
+            except OSError as exc:
+                raise RuntimeError("本地模型发布失败") from exc
+            if not _verify_model_hashes(model_dir, asset):
+                raise RuntimeError("模型发布后校验失败")
+        except Exception:
+            _restore_previous()
+            raise
+        _remove_tree(backup)
 
 
 def install(

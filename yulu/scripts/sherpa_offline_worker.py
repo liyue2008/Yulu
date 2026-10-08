@@ -180,14 +180,28 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--vad-max-speech", type=float, default=25.0)
     args = parser.parse_args(argv)
 
+    # Validate --wav entries before the ~1.6 GB model load so malformed
+    # labels fail fast instead of after a long startup.
+    sources: dict[str, Path] = {}
+    for entry in args.wav:
+        label, _, value = entry.partition("=")
+        if label not in SOURCES or not value:
+            print(json.dumps({"fatal": f"--wav 需要 {SOURCES} 之一的 SOURCE=PATH 形式: {entry}"},
+                             ensure_ascii=False), file=sys.stderr, flush=True)
+            return 2
+        if label in sources:
+            print(json.dumps({"fatal": f"重复的音频源: {label}"},
+                             ensure_ascii=False), file=sys.stderr, flush=True)
+            return 2
+        sources[label] = Path(value).expanduser()
+    if not sources:
+        print(json.dumps({"fatal": "至少需要一个 --wav SOURCE=PATH"},
+                         ensure_ascii=False), file=sys.stderr, flush=True)
+        return 2
+
     os.environ.setdefault("OMP_NUM_THREADS", "1")
     with contextlib.suppress(OSError):
         os.nice(10)
-
-    if args.language == "ja":
-        print(json.dumps({"fatal": "本地离线模型仅支持中英文；日语请显式选择 xAI 引擎"},
-                         ensure_ascii=False), file=sys.stderr, flush=True)
-        return 2
 
     try:
         trusted_script_dir = Path(__file__).resolve().parent
@@ -211,18 +225,8 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps({"fatal": str(exc)}, ensure_ascii=False), file=sys.stderr, flush=True)
         return 2
 
-    sources: dict[str, Path] = {}
+    results: dict[str, list[dict[str, Any]]] = {}
     try:
-        for entry in args.wav:
-            label, _, value = entry.partition("=")
-            if label not in SOURCES or not value:
-                raise ValueError(f"--wav 需要 {SOURCES} 之一的 SOURCE=PATH 形式: {entry}")
-            if label in sources:
-                raise ValueError(f"重复的音频源: {label}")
-            sources[label] = Path(value).expanduser()
-        if not sources:
-            raise ValueError("至少需要一个 --wav SOURCE=PATH")
-        results: dict[str, list[dict[str, Any]]] = {}
         for label in SOURCES:
             path = sources.get(label)
             if path is None:

@@ -63,14 +63,28 @@ function usableRuntime(runtime: LocalCaptionRuntime): boolean {
     REQUIRED_MODEL_FILES.every((name) => existsSync(join(runtime.modelDir, name)));
 }
 
-export function resolveLocalCaptionRuntime(input: {
+/**
+ * Offline final transcription only needs the runtime pack plus the offline
+ * (FireRedASR) and VAD assets — it must keep working when the streaming
+ * paraformer model is uninstalled. The pack/python base is resolved here;
+ * asset-level checks stay in transcribeFile so missing models get the
+ * dedicated install guidance instead of a generic runtime error.
+ */
+function usableOfflineFinalRuntime(runtime: LocalCaptionRuntime): boolean {
+  return existsSync(runtime.python) && existsSync(runtime.pythonPath) &&
+    existsSync(runtime.runtimePack);
+}
+
+interface RuntimeResolveInput {
   scriptDir: string;
   configDir: string;
   modelsDir?: string;
   legacyConfigDir?: string;
   legacyModelsDir?: string;
   env?: NodeJS.ProcessEnv;
-}): LocalCaptionRuntime | null {
+}
+
+function* candidateRuntimes(input: RuntimeResolveInput): Generator<LocalCaptionRuntime> {
   const env = input.env ?? process.env;
   const candidates = [
     { dataDir: input.configDir, modelsDir: input.modelsDir ?? join(input.configDir, "models") },
@@ -81,7 +95,7 @@ export function resolveLocalCaptionRuntime(input: {
   ];
   for (const candidate of candidates) {
     const runtimePack = join(candidate.dataDir, "local-caption", "YuluLocalCaptionRuntime.bundle");
-    const runtime: LocalCaptionRuntime = {
+    yield {
       python: env.YULU_PYTHON?.trim() || "",
       pythonPath: join(runtimePack, "Contents", "Resources", "site-packages"),
       runtimePack,
@@ -90,7 +104,34 @@ export function resolveLocalCaptionRuntime(input: {
       offlineModelDir: env.YULU_LOCAL_CAPTION_OFFLINE_MODEL_DIR?.trim() || join(candidate.modelsDir, OFFLINE_MODEL_NAME),
       vadModelDir: env.YULU_LOCAL_CAPTION_VAD_MODEL_DIR?.trim() || join(candidate.modelsDir, VAD_MODEL_NAME),
     };
+  }
+}
+
+export function resolveLocalCaptionRuntime(input: {
+  scriptDir: string;
+  configDir: string;
+  modelsDir?: string;
+  legacyConfigDir?: string;
+  legacyModelsDir?: string;
+  env?: NodeJS.ProcessEnv;
+}): LocalCaptionRuntime | null {
+  for (const runtime of candidateRuntimes(input)) {
     if (usableRuntime(runtime)) return runtime;
+  }
+  return null;
+}
+
+/** Resolve a runtime for offline final transcription: runtime pack + offline/VAD assets, streaming model not required. */
+export function resolveOfflineFinalRuntime(input: {
+  scriptDir: string;
+  configDir: string;
+  modelsDir?: string;
+  legacyConfigDir?: string;
+  legacyModelsDir?: string;
+  env?: NodeJS.ProcessEnv;
+}): LocalCaptionRuntime | null {
+  for (const runtime of candidateRuntimes(input)) {
+    if (usableOfflineFinalRuntime(runtime)) return runtime;
   }
   return null;
 }

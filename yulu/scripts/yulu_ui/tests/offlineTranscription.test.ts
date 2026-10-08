@@ -73,7 +73,7 @@ interface Fixture {
   service: OfflineTranscriptionService;
 }
 
-function fixture(workerSource = STUB_WORKER, opts: { offlineModel?: boolean; vadModel?: boolean } = {}): Fixture {
+function fixture(workerSource = STUB_WORKER, opts: { offlineModel?: boolean; vadModel?: boolean; streamingModel?: boolean } = {}): Fixture {
   const root = mkdtempSync(join(tmpdir(), "yulu-offline-transcription-"));
   roots.push(root);
   const scriptDir = join(root, "scripts");
@@ -98,8 +98,10 @@ function fixture(workerSource = STUB_WORKER, opts: { offlineModel?: boolean; vad
       writeFileSync(join(offlineModelDir, name), name);
     }
   }
-  for (const name of ["tokens.txt", "encoder.int8.onnx", "decoder.int8.onnx"]) {
-    writeFileSync(join(streamingModelDir, name), name);
+  if (opts.streamingModel !== false) {
+    for (const name of ["tokens.txt", "encoder.int8.onnx", "decoder.int8.onnx"]) {
+      writeFileSync(join(streamingModelDir, name), name);
+    }
   }
   if (opts.vadModel !== false) {
     writeFileSync(join(vadModelDir, "silero_vad.onnx"), "vad");
@@ -227,6 +229,17 @@ describe("OfflineTranscriptionService", () => {
     await expect(fx.service.transcribeFile(audioPath, "ja"))
       .rejects.toThrow(AgentUnavailableError);
     await expect(fx.service.transcribeFile(audioPath, "ja")).rejects.toThrow("仅支持中英文");
+  });
+
+  it("keeps final-tier transcription working when the streaming model is uninstalled", async () => {
+    const fx = fixture(undefined, { streamingModel: false });
+    const audioPath = makeStereoWav(fx.root);
+
+    const result = await fx.service.transcribeFile(audioPath, "zh");
+
+    expect(result.provider).toBe("sherpa-onnx-fire-red-asr-large-int8");
+    expect(result.transcript).toContain("讨论预算");
+    expect(fx.service.modelInstalled()).toBe(true);
   });
 
   it("rejects with an actionable message when the offline assets are missing", async () => {

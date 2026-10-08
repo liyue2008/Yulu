@@ -9,7 +9,7 @@ import {
   isOfflineModelInstalled,
   isVadModelInstalled,
   OFFLINE_MODEL_PROVIDER,
-  resolveLocalCaptionRuntime,
+  resolveOfflineFinalRuntime,
   type LocalCaptionRuntime,
 } from "./localCaptionEngine.js";
 import { SourceSeparatedResampler } from "./pcmResampler.js";
@@ -107,7 +107,9 @@ export class OfflineTranscriptionService {
   }
 
   private resolveRuntime(): LocalCaptionRuntime | null {
-    return resolveLocalCaptionRuntime({
+    // Offline final transcription does not require the streaming model —
+    // keep it usable after `uninstall --model streaming`.
+    return resolveOfflineFinalRuntime({
       scriptDir: this.options.scriptDir,
       configDir: this.options.configDir,
       modelsDir: this.options.modelsDir,
