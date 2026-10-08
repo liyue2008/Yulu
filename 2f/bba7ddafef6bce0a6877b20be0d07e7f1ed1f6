@@ -1,0 +1,35 @@
+docs/configuration.md
+  s_791bc46647d28f::t_9010579d1e4186 204-205
+tests/test_local_caption_runtime.py
+  s_791bc46647d28f::t_db77423f9646a4 410-470
+yulu/scripts/config.example.json
+  s_791bc46647d28f::t_14499692201350 55-58
+yulu/scripts/yulu_ui/src/config.ts
+  s_791bc46647d28f::t_fde54792c0ef8a 125-128
+yulu/scripts/yulu_ui/src/settingsRegistry.ts
+  s_791bc46647d28f::t_a4a1af6644bb31 92-93
+yulu/scripts/yulu_ui/tests/config.test.ts
+  s_791bc46647d28f::t_0397f5f167efd5 72-108
+yulu/scripts/yulu_ui/tests/localCaptionEngine.test.ts
+  s_791bc46647d28f::t_cb5f4471b5936a 7,10,57-58,133-134,172-173,216-217,251-252
+yulu/scripts/yulu_ui/tests/settingsRegistry.test.ts
+  s_791bc46647d28f::t_4e70654958b4b7 14-29
+yulu/scripts/yulu_ui/web/src/i18n/messages.ts
+  s_791bc46647d28f::t_d00e580d61bc09 878-884,2340-2346
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "2fbba7ddafef6bce0a6877b20be0d07e7f1ed1f6",
+  "prompts": {},
+  "sessions": {
+    "s_791bc46647d28f": {
+      "agent_id": {
+        "tool": "pi",
+        "id": "01a11bed-345a-7335-bc79-66d2c4579fd8",
+        "model": "glm-5.3"
+      },
+      "human_author": "ethan.li <ethan.li@lbk.one>"
+    }
+  }
+}
