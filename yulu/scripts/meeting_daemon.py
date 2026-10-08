@@ -132,6 +132,39 @@ def _agent_pipeline_auto_processing(path: Path | None = None) -> bool:
     return not explicitly_disabled and not auto_process_disabled
 
 
+def _captions_config(path: Path | None = None) -> dict:
+    """Read the optional ``transcription.captions`` block (empty when absent)."""
+    path = path or (
+        CONFIG_PATH if CONFIG_PATH.exists() else next(
+            (candidate for candidate in CONFIG_READ_PATHS if candidate.exists()),
+            CONFIG_PATH,
+        )
+    )
+    try:
+        config = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    transcription = config.get("transcription") if isinstance(config, dict) else None
+    captions = transcription.get("captions") if isinstance(transcription, dict) else None
+    return captions if isinstance(captions, dict) else {}
+
+
+def _captions_realtime_enabled(path: Path | None = None) -> bool:
+    """Meeting realtime captions are opt-in; a missing key keeps them off.
+
+    The Host realtime endpoints stay available for dictation regardless of
+    this switch; it only gates the capture-side ``start``/``stop`` posts.
+    """
+    enabled = _captions_config(path).get("realtime_enabled")
+    return type(enabled) is bool and enabled
+
+
+def _status_window_enabled(path: Path | None = None) -> bool:
+    """The recording status window is opt-in; a missing key keeps it off."""
+    enabled = _captions_config(path).get("status_window_enabled")
+    return type(enabled) is bool and enabled
+
+
 def _recording_completed_payload(audio_path: str, title: str, language: str | None = None) -> dict:
     return {
         "audioPath": audio_path,
@@ -643,17 +676,21 @@ def _start_recording(title, meeting_id=""):
                 extra={"segments": [audio_path], "transcription_language": language},
             )
             print(f"✅ 录制中: {audio_path}")
-            if _post_realtime("start", {
-                "audioPath": audio_path,
-                "title": title,
-                "language": language,
-            }):
-                print(f"📝 实时转写已启动 ({language})")
+            if _captions_realtime_enabled():
+                if _post_realtime("start", {
+                    "audioPath": audio_path,
+                    "title": title,
+                    "language": language,
+                }):
+                    print(f"📝 实时转写已启动 ({language})")
+                else:
+                    print("⚠️ 实时转写暂不可用；停止后仍会完整转写", file=sys.stderr)
             else:
-                print("⚠️ 实时转写暂不可用；停止后仍会完整转写", file=sys.stderr)
+                print("ℹ️ 实时字幕未启用；停止后仍会完整转写")
 
             # 启动状态浮窗
-            _launch_status_window(title)
+            if _status_window_enabled():
+                _launch_status_window(title)
 
             # 注册"录制超时询问停止"事件：会议结束时间触发
             duration_min = _meeting_duration(meeting_id)
@@ -983,7 +1020,9 @@ def _stop_and_process(stop_reason="manual"):
         return False
     audio_path = str(resolved_audio_path)
 
-    if not _post_realtime("stop", {"audioPath": audio_path}):
+    if _captions_realtime_enabled() and not _post_realtime(
+        "stop", {"audioPath": audio_path}
+    ):
         print("⚠️ 实时转写收尾失败；将使用完整录音重新转写", file=sys.stderr)
 
     set_recording_stopped(path=STATE_PATH)

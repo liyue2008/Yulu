@@ -89,6 +89,10 @@ export const SETTINGS: SettingDef[] = [
   { path: "audio.backend",               category: "audio", label: "音频后端",     type: "select",  validate: z.enum(["daemon"]),          reload: R.restart("audiodaemon"), danger: true }, // 切换采集后端:可能中断录音
   { path: "transcription.language",      category: "transcription", label: "语言",   type: "select", validate: z.enum(["zh", "en", "ja", "auto"]), reload: R.none },
   { path: "transcription.engine",        category: "transcription", label: "音频转写引擎", type: "select", validate: z.enum(["local", "xai"]), reload: R.none },
+  // Capture-edge opt-ins: the meeting daemon re-reads config at every
+  // recording start/stop, so changes apply without a daemon reload.
+  { path: "transcription.captions.realtime_enabled",  category: "transcription", label: "会议实时字幕", type: "toggle", validate: z.boolean(), reload: R.none },
+  { path: "transcription.captions.status_window_enabled", category: "transcription", label: "录制状态浮窗", type: "toggle", validate: z.boolean(), reload: R.none },
   { path: "llm.enabled",                 category: "llm", label: "启用 LLM",       type: "toggle",  validate: z.boolean(),                 reload: R.none, hidden: true },
   { path: "llm.command",                 category: "llm", label: "LLM 后端",       type: "preset",  validate: z.array(z.string()).nullable(), reload: R.none, hidden: true },
   { path: "llm.agent.provider",          category: "llm", label: "Agent provider", type: "select",  validate: z.enum(["auto", "codex", "claude", "claude-code", "hermes", "openclaw"]), reload: R.none, hidden: true },

@@ -52,6 +52,11 @@
   "transcription": {
     "engine": "local",
     "language": "zh",
+    "captions": {
+      "realtime_enabled": false,
+      "status_window_enabled": false,
+      "note": "会议实时字幕与录制状态浮窗默认关闭；仅显式设为 true 时开启，停止后仍会完整转写。听写不受这两个开关影响。"
+    },
     "dictation": {
       "language": "zh",
       "cleanup_enabled": true,
