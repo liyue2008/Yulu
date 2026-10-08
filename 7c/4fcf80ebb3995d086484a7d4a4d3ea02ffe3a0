@@ -1,0 +1,22 @@
+tests/test_meeting_daemon_lark_reminder.py
+  h_b4d40596eab523 1-111
+tests/test_meeting_daemon_stop.py
+  h_b4d40596eab523 18-24,513
+tests/test_meeting_detector_processes.py
+  h_b4d40596eab523 12-89
+yulu/scripts/meeting_daemon.py
+  h_b4d40596eab523 768-778,789-807,819
+yulu/scripts/meeting_detector.py
+  h_b4d40596eab523 288,291-293,295-311,329-332
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "7c4fcf80ebb3995d086484a7d4a4d3ea02ffe3a0",
+  "prompts": {},
+  "humans": {
+    "h_b4d40596eab523": {
+      "author": "ethan.li <ethan.li@lbk.one>"
+    }
+  }
+}
